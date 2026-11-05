@@ -1,0 +1,8 @@
+{
+  "durationSeconds": 180,
+  "preSeconds": 3,
+  "lastMinuteAt": 60,
+  "countdownAt": 10,
+  "settleSeconds": 0.5,
+  "teamSize": 4
+}

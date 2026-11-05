@@ -1,0 +1,195 @@
+/* On-screen controls for thumbs. Nothing here loads images or writes inline CSS. */
+
+.pr-touch {
+  --pr-touch-scale: 1;
+  --pr-touch-offset-x: 0;
+  --pr-touch-offset-y: 0;
+  --pr-touch-stick-x: 50%;
+  --pr-touch-stick-y: 50%;
+  --pr-touch-knob-x: 0px;
+  --pr-touch-knob-y: 0px;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: block;
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  font-family:
+    system-ui,
+    'Hiragino Maru Gothic ProN',
+    'BIZ UDPGothic',
+    sans-serif;
+  color: #2b2f5c;
+}
+
+.pr-touch--hidden,
+.pr-touch[hidden] {
+  display: none;
+}
+
+.pr-touch__zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.pr-touch__stick-zone {
+  left: 0;
+  width: 50%;
+}
+
+.pr-touch__look-zone {
+  right: 0;
+  width: 50%;
+}
+
+/* The base appears under the finger that started the drag. */
+.pr-touch__stick {
+  position: absolute;
+  left: var(--pr-touch-stick-x);
+  top: var(--pr-touch-stick-y);
+  width: calc(120px * var(--pr-touch-scale));
+  height: calc(120px * var(--pr-touch-scale));
+  margin: 0;
+  padding: 0;
+  border: calc(4px * var(--pr-touch-scale)) solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.12) 62%,
+    rgba(43, 47, 92, 0.16) 100%
+  );
+  box-shadow: 0 0 calc(16px * var(--pr-touch-scale)) rgba(43, 47, 92, 0.28);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.pr-touch__stick--active {
+  opacity: 1;
+  visibility: visible;
+}
+
+.pr-touch__stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(52px * var(--pr-touch-scale));
+  height: calc(52px * var(--pr-touch-scale));
+  border: calc(3px * var(--pr-touch-scale)) solid #2b2f5c;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #ffffff 0%, #ffe45e 100%);
+  box-shadow: 0 calc(3px * var(--pr-touch-scale)) calc(8px * var(--pr-touch-scale)) rgba(43, 47, 92, 0.3);
+  transform: translate(
+    calc(-50% + var(--pr-touch-knob-x)),
+    calc(-50% + var(--pr-touch-knob-y))
+  );
+}
+
+.pr-touch__buttons {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translate(
+    calc(var(--pr-touch-offset-x) * 100vw),
+    calc(var(--pr-touch-offset-y) * 100vh)
+  );
+}
+
+.pr-touch__button {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(64px * var(--pr-touch-scale));
+  height: calc(64px * var(--pr-touch-scale));
+  min-width: calc(64px * var(--pr-touch-scale));
+  min-height: calc(64px * var(--pr-touch-scale));
+  margin: 0;
+  padding: 0;
+  border: calc(3px * var(--pr-touch-scale)) solid #2b2f5c;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #2b2f5c;
+  font-family: inherit;
+  font-size: calc(13px * var(--pr-touch-scale));
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 calc(4px * var(--pr-touch-scale)) 0 rgba(43, 47, 92, 0.28);
+  transition: transform 80ms ease-out, background-color 80ms ease-out;
+}
+
+.pr-touch__button--down {
+  background: #ffe45e;
+  transform: scale(0.92);
+}
+
+.pr-touch__button--fire {
+  right: calc(28px * var(--pr-touch-scale));
+  bottom: calc(126px * var(--pr-touch-scale));
+  width: calc(76px * var(--pr-touch-scale));
+  height: calc(76px * var(--pr-touch-scale));
+  min-width: calc(76px * var(--pr-touch-scale));
+  min-height: calc(76px * var(--pr-touch-scale));
+  background: rgba(255, 228, 94, 0.94);
+}
+
+.pr-touch__button--jump {
+  right: calc(34px * var(--pr-touch-scale));
+  bottom: calc(36px * var(--pr-touch-scale));
+  background: rgba(25, 230, 208, 0.9);
+}
+
+.pr-touch__button--dive {
+  right: calc(122px * var(--pr-touch-scale));
+  bottom: calc(34px * var(--pr-touch-scale));
+  background: rgba(120, 165, 255, 0.92);
+}
+
+.pr-touch__button--sub {
+  right: calc(124px * var(--pr-touch-scale));
+  bottom: calc(126px * var(--pr-touch-scale));
+  background: rgba(255, 158, 205, 0.92);
+}
+
+.pr-touch__button--special {
+  right: calc(216px * var(--pr-touch-scale));
+  bottom: calc(82px * var(--pr-touch-scale));
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.pr-touch__button--pause {
+  top: calc(10px * var(--pr-touch-scale));
+  right: calc(10px * var(--pr-touch-scale));
+  width: calc(48px * var(--pr-touch-scale));
+  height: calc(48px * var(--pr-touch-scale));
+  min-width: calc(48px * var(--pr-touch-scale));
+  min-height: calc(48px * var(--pr-touch-scale));
+  font-size: calc(10px * var(--pr-touch-scale));
+  transform: translate(
+    calc(var(--pr-touch-offset-x) * 100vw),
+    calc(var(--pr-touch-offset-y) * 100vh)
+  );
+}
+
+.pr-touch__button--pause.pr-touch__button--down {
+  transform: translate(
+      calc(var(--pr-touch-offset-x) * 100vw),
+      calc(var(--pr-touch-offset-y) * 100vh)
+    )
+    scale(0.92);
+}

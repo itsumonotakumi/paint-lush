@@ -1,0 +1,238 @@
+.pr-screen.pr-settings {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+  padding: clamp(12px, 3vw, 32px);
+  overflow-y: auto;
+  color: #2b2f5c;
+  text-align: left;
+  font-family: system-ui, -apple-system, 'Hiragino Maru Gothic ProN', 'BIZ UDPGothic', sans-serif;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(255, 255, 255, 0.9) 0 10%, transparent 11%),
+    radial-gradient(circle at 88% 14%, rgba(255, 255, 255, 0.72) 0 7%, transparent 8%),
+    linear-gradient(160deg, #fff6e5 0%, #ffe8f3 48%, #e7fbff 100%);
+  pointer-events: auto;
+  touch-action: pan-y;
+}
+
+.pr-settings__panel {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 2vw, 16px);
+  padding-bottom: 24px;
+}
+
+.pr-settings__title {
+  margin: 0 0 4px;
+  text-align: center;
+  font-size: clamp(30px, 6vw, 46px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #ff2e88;
+  text-shadow:
+    0 3px 0 #ffffff,
+    0 7px 0 rgba(43, 47, 92, 0.16);
+}
+
+.pr-settings__group {
+  padding: 14px 16px 16px;
+  border: 3px solid #ffffff;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 0 rgba(43, 47, 92, 0.1);
+}
+
+.pr-settings__group-title {
+  margin: 0 0 10px;
+  font-size: clamp(18px, 3vw, 22px);
+  font-weight: 900;
+  color: #2b2f5c;
+}
+
+.pr-settings__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pr-settings__row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.pr-settings__label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.pr-settings__label-text {
+  line-height: 1.4;
+}
+
+.pr-settings__value {
+  color: #7a4bd6;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.pr-slider {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  accent-color: #ff2e88;
+  cursor: pointer;
+}
+
+.pr-settings__row--toggle {
+  gap: 0;
+}
+
+.pr-settings__toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pr-toggle {
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  accent-color: #19c9b8;
+  cursor: pointer;
+}
+
+.pr-select {
+  min-height: 52px;
+  padding: 0 12px;
+  border: 3px solid #ffc14d;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #2b2f5c;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pr-select__option {
+  color: #2b2f5c;
+}
+
+.pr-settings__row--key {
+  grid-template-columns: 1fr minmax(136px, auto);
+  align-items: center;
+  gap: 10px;
+}
+
+.pr-key-button {
+  min-width: 136px;
+  border: 3px solid #ffc14d;
+  background: #ffffff;
+  box-shadow: 0 4px 0 rgba(43, 47, 92, 0.18);
+  font-size: 18px;
+}
+
+.pr-key-button.is-listening {
+  border-color: #0f8f82;
+  background: #19e6d0;
+  animation: pr-settings-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.pr-settings__hint {
+  margin: 0 0 4px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: rgba(43, 47, 92, 0.72);
+}
+
+.pr-settings__status {
+  min-height: 1.5em;
+  margin: 0;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f8f82;
+}
+
+.pr-settings__status.is-warn {
+  color: #d42a63;
+}
+
+.pr-button {
+  min-height: 56px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  background: #ffc14d;
+  color: #2b2f5c;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 900;
+  box-shadow: 0 5px 0 #b7832b;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    transform 0.08s ease,
+    box-shadow 0.08s ease,
+    background 0.15s ease;
+}
+
+.pr-button:hover {
+  background: #ffd06a;
+}
+
+.pr-button:active {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 #b7832b;
+}
+
+.pr-button:focus-visible {
+  outline: 4px solid #19e6d0;
+  outline-offset: 3px;
+}
+
+.pr-settings__back {
+  align-self: center;
+  min-width: 200px;
+  margin-top: 4px;
+}
+
+@keyframes pr-settings-pulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-settings,
+  .pr-settings * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

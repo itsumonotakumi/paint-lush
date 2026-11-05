@@ -27,15 +27,36 @@ const events: GameEvent[] = [
   { t: 'dive', id: 1, in: false, pos },
   { t: 'jump', id: 1, pos },
   { t: 'land', id: 1, pos },
-  { t: 'special', phase: 'ready' },
-  { t: 'special', phase: 'start' },
-  { t: 'special', phase: 'end' },
+  { t: 'special', id: 1, phase: 'ready' },
+  { t: 'special', id: 1, phase: 'start' },
+  { t: 'special', id: 1, phase: 'end' },
   { t: 'phase', phase: 'pre' },
   { t: 'phase', phase: 'play' },
   { t: 'phase', phase: 'lastMinute' },
   { t: 'phase', phase: 'countdown' },
   { t: 'phase', phase: 'finished' },
+  { t: 'sub', phase: 'throw', team: 0, pos },
+  { t: 'sub', phase: 'burst', team: 1, pos },
+  { t: 'swing', id: 1, pos },
+  { t: 'charge', id: 1, level: 0 },
+  { t: 'charge', id: 1, level: 1 },
+  { t: 'charge', id: 1, level: 2 },
+  { t: 'countdown', n: 5 },
+  { t: 'countdown', n: 3 },
+  { t: 'voice', line: 'start' },
+  { t: 'voice', line: 'lastMinute' },
+  { t: 'voice', line: 'win' },
+  { t: 'voice', line: 'lose' },
+  { t: 'ui', kind: 'cursor' },
+  { t: 'ui', kind: 'ok' },
+  { t: 'ui', kind: 'cancel' },
 ];
+
+function required(event: GameEvent): SeSpec {
+  const spec = seSpecFor(event);
+  if (spec === null) throw new Error(`expected audible ${event.t}`);
+  return spec;
+}
 
 describe('seSpecFor', () => {
   it('returns playable, finite layers for every event', () => {
@@ -110,5 +131,66 @@ describe('seSpecFor', () => {
     expect(seSpecFor({ t: 'kill', killer: 1, victim: 2, pos })).toEqual(
       seSpecFor({ t: 'kill', killer: 1, victim: 2, pos }),
     );
+  });
+
+  it('covers at least 30 distinct event sounds', () => {
+    const serialized = events.map((event) => JSON.stringify(required(event)));
+    expect(new Set(serialized).size).toBeGreaterThanOrEqual(30);
+    expect(new Set(serialized).size).toBe(events.length);
+  });
+
+  it('gives each named weapon a different shot', () => {
+    const shots = ['iro-shuriken', 'oofude', 'naga-fukiya'].map((weapon) =>
+      JSON.stringify(required({ t: 'shoot', weapon, pos })),
+    );
+    expect(new Set(shots).size).toBe(3);
+  });
+
+  it('raises charge pitch with every level', () => {
+    const pitches = ([0, 1, 2] as const).map(
+      (level) => firstLayer(required({ t: 'charge', id: 1, level })).startFreq,
+    );
+    expect(pitches[0]).toBeLessThan(pitches[1] ?? 0);
+    expect(pitches[1]).toBeLessThan(pitches[2] ?? 0);
+  });
+
+  it('makes the final countdown ticks brighter and higher', () => {
+    const early = firstLayer(required({ t: 'countdown', n: 5 }));
+    const final = firstLayer(required({ t: 'countdown', n: 3 }));
+    expect(final.startFreq).toBeGreaterThan(early.startFreq);
+    expect(required({ t: 'countdown', n: 1 })).toEqual(required({ t: 'countdown', n: 3 }));
+
+    for (const n of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const spec = required({ t: 'countdown', n });
+      expect(Number.isFinite(firstLayer(spec).startFreq)).toBe(true);
+    }
+  });
+
+  it('keeps every voice jingle between one and two seconds', () => {
+    for (const line of ['start', 'lastMinute', 'win', 'lose'] as const) {
+      const spec = required({ t: 'voice', line });
+      const total = Math.max(
+        ...spec.layers.map((layer) => (layer.delay ?? 0) + layer.duration),
+      );
+      expect(total).toBeGreaterThanOrEqual(1);
+      expect(total).toBeLessThanOrEqual(2);
+      // Taiko (low) and flute (high) layers coexist in every jingle.
+      expect(spec.layers.some((layer) => layer.startFreq <= 160)).toBe(true);
+      expect(spec.layers.some((layer) => layer.startFreq >= 600)).toBe(true);
+    }
+  });
+
+  it('gives sub phases, swings and interface cues distinct sounds', () => {
+    const throwSpec = required({ t: 'sub', phase: 'throw', team: 0, pos });
+    const burstSpec = required({ t: 'sub', phase: 'burst', team: 0, pos });
+    expect(throwSpec).not.toEqual(burstSpec);
+    expect(required({ t: 'swing', id: 1, pos })).not.toEqual(throwSpec);
+
+    const cursor = required({ t: 'ui', kind: 'cursor' });
+    const ok = required({ t: 'ui', kind: 'ok' });
+    const cancel = required({ t: 'ui', kind: 'cancel' });
+    expect(cursor).not.toEqual(ok);
+    expect(ok).not.toEqual(cancel);
+    expect(cancel).not.toEqual(cursor);
   });
 });

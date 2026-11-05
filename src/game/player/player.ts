@@ -14,6 +14,9 @@ export interface PlayerEnv {
 
 const TWO_PI = Math.PI * 2;
 const PITCH_LIMIT = 1.2;
+/** Sanity cap so an outside speed scale can never produce an infinite target. */
+const MAX_MOVE_MULTIPLIER = 8;
+const DEFAULT_WEAPON_ID = 'iro-shuriken';
 /** Small help onto a ledge after a wall climb. */
 const LEDGE_NUDGE_MIN = 0.15;
 const LEDGE_NUDGE_MAX = 0.5;
@@ -79,7 +82,13 @@ function eventPos(p: PlayerState): Vec3 {
  */
 const lastMove = new WeakMap<PlayerState, ReturnType<ICollision['moveAndSlide']>>();
 
-export function createPlayer(id: EntityId, team: TeamId, spawn: Vec3, cfg: PlayerConfig): PlayerState {
+export function createPlayer(
+  id: EntityId,
+  team: TeamId,
+  spawn: Vec3,
+  cfg: PlayerConfig,
+  weaponId: string = DEFAULT_WEAPON_ID,
+): PlayerState {
   return {
     id,
     team,
@@ -100,6 +109,14 @@ export function createPlayer(id: EntityId, team: TeamId, spawn: Vec3, cfg: Playe
     invuln: 0,
     prevDive: false,
     prevJump: false,
+    weaponId,
+    subCooldown: 0,
+    kills: 0,
+    deaths: 0,
+    paintCells: 0,
+    special: { gauge: 0, activeLeft: 0, prevButton: false },
+    moveMultiplier: 1,
+    charge: 0,
   };
 }
 
@@ -157,6 +174,11 @@ function moveToSpawn(p: PlayerState, spawn: Vec3): void {
   p.vel.z = 0;
 }
 
+/** Keeps an externally supplied speed scale finite and non-negative. */
+function sanitiseMoveMultiplier(value: number): number {
+  return clamp(finiteOr(value, 1), 0, MAX_MOVE_MULTIPLIER);
+}
+
 function stepDead(p: PlayerState, input: InputActions, env: PlayerEnv, cfg: PlayerConfig, dt: number): GameEvent[] {
   const events: GameEvent[] = [];
   p.vel.x = 0;
@@ -166,6 +188,8 @@ function stepDead(p: PlayerState, input: InputActions, env: PlayerEnv, cfg: Play
   p.diveTransition = tickTimer(p.diveTransition, dt);
   p.fireLock = tickTimer(p.fireLock, dt);
   p.invuln = tickTimer(p.invuln, dt);
+  p.subCooldown = tickTimer(p.subCooldown, dt);
+  p.moveMultiplier = sanitiseMoveMultiplier(p.moveMultiplier);
 
   const timer = tickTimer(p.respawnTimer, dt);
   p.respawnTimer = timer;
@@ -181,6 +205,9 @@ function stepDead(p: PlayerState, input: InputActions, env: PlayerEnv, cfg: Play
     p.ink = Math.max(0, finiteOr(cfg.maxInk, 0));
     p.invuln = nonNegative(cfg.respawnInvulnSeconds);
     p.respawnTimer = 0;
+    // Charge is a weapon charge; the special gauge is earned, so it survives.
+    p.special.activeLeft = 0;
+    p.charge = 0;
     // Teleport exactly when the respawn event fires.
     moveToSpawn(p, env.spawn);
     lastMove.delete(p);
@@ -210,6 +237,8 @@ export function stepPlayer(
   p.diveTransition = tickTimer(p.diveTransition, step);
   p.fireLock = tickTimer(p.fireLock, step);
   p.invuln = tickTimer(p.invuln, step);
+  p.subCooldown = tickTimer(p.subCooldown, step);
+  p.moveMultiplier = sanitiseMoveMultiplier(p.moveMultiplier);
 
   const lookX = finiteOr(input.look[0], 0);
   const lookY = finiteOr(input.look[1], 0);
@@ -253,7 +282,7 @@ export function stepPlayer(
     p.vel.y = finiteOr(p.vel.y, 0) - gravity * step;
   }
 
-  const targetSpeed = (() => {
+  const baseSpeed = (() => {
     if (groundTeam !== NO_TEAM && groundTeam !== p.team) {
       return nonNegative(cfg.enemyInkSpeed);
     }
@@ -264,6 +293,10 @@ export function stepPlayer(
     }
     return nonNegative(cfg.walkSpeed);
   })();
+  // Weapons scale stance and air speed only; dive speed is fixed by the form.
+  const speedScale =
+    p.state === 'stance' || p.state === 'air' ? p.moveMultiplier : 1;
+  const targetSpeed = baseSpeed * speedScale;
 
   const forward = forwardFromYaw(p.yaw);
   const right = rightFromYaw(p.yaw);
@@ -382,6 +415,7 @@ export function applyDamage(p: PlayerState, hit: DamageHit, cfg: PlayerConfig): 
 
   if (p.hp <= 0) {
     p.hp = 0;
+    p.deaths += 1;
     // Dying while diving still ends the dive, so arm the fire lock centrally.
     leaveDive(p, cfg);
     p.state = 'down';

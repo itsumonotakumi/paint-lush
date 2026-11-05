@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { boxAround, boxOverlap } from '../../core/math/aabb';
 import type { Box, Face, Vec3 } from '../../core/types';
+import aiJson from '../../data/ai.json';
+import matchJson from '../../data/match.json';
 import playerJson from '../../data/player.json';
+import specialsJson from '../../data/specials.json';
 import stageJson from '../../data/stages/neon-town.json';
+import subsJson from '../../data/subs.json';
 import weaponsJson from '../../data/weapons.json';
-import { parsePlayerConfig, parseStage, parseWeapons } from './load';
+import {
+  parseAi,
+  parseMatchConfig,
+  parsePlayerConfig,
+  parseSpecial,
+  parseStage,
+  parseSub,
+  parseWeapons,
+} from './load';
 import type { StageData } from './schemas';
 
 const PLAYER_HALF: Vec3 = { x: 0.3, y: 0.8, z: 0.3 };
@@ -158,6 +170,7 @@ describe('shipped data', () => {
         id: 'iro-shuriken',
         name: '彩手裏剣',
         kind: 'projectile',
+        specialGainPerCell: 1,
         intervalSeconds: 0.125,
         inkCost: 0.9,
         damage: 28,
@@ -169,6 +182,39 @@ describe('shipped data', () => {
         trailRadius: 0.3,
         lifetimeSeconds: 3,
       },
+      {
+        id: 'oofude',
+        name: '大筆',
+        kind: 'brush',
+        specialGainPerCell: 0.8,
+        rollInkPerSec: 6,
+        rollWidth: 1.6,
+        rollSpacing: 0.25,
+        rollSpeedMultiplier: 0.75,
+        rollDamage: 40,
+        swingIntervalSeconds: 0.5,
+        swingReach: 2.4,
+        swingArcRadians: 1.2,
+        swingDamage: 100,
+        swingPaintRadius: 1.2,
+        swingInkCost: 8,
+      },
+      {
+        id: 'naga-fukiya',
+        name: '長吹き矢',
+        kind: 'charge',
+        specialGainPerCell: 0.8,
+        fullChargeSeconds: 1,
+        minChargeFraction: 0.25,
+        rangeMin: 8,
+        rangeFull: 26,
+        damageMin: 40,
+        damageFull: 100,
+        lineRadius: 0.45,
+        lineSpacing: 0.4,
+        inkCostFull: 18,
+        chargeMoveMultiplier: 0.5,
+      },
     ]);
   });
 
@@ -179,8 +225,82 @@ describe('shipped data', () => {
     expect(stage.cellSize).toBe(0.125);
     expect(stage.spawns[0]).toHaveLength(4);
     expect(stage.spawns[1]).toHaveLength(4);
-    expect(stage.waypoints.length).toBeGreaterThanOrEqual(12);
-    expect(stage.boxes.length).toBeLessThanOrEqual(80);
+    expect(stage.waypoints.length).toBeGreaterThanOrEqual(16);
+    expect(stage.boxes.length).toBeLessThanOrEqual(120);
+    expect(stage.bgm).toBe('battle');
+    expect(stage.waypoints.every((waypoint) => Array.isArray(waypoint.tags))).toBe(true);
+  });
+
+  it('parses the sub weapon definition', () => {
+    expect(parseSub(subsJson)).toEqual({
+      id: 'saien-dama',
+      name: '彩煙玉',
+      kind: 'smokeBomb',
+      inkCost: 40,
+      throwSpeed: 14,
+      throwPitchRadians: 0.6,
+      gravity: 20,
+      restitution: 0.3,
+      fuseSeconds: 1.2,
+      blastRadius: 2.2,
+      damage: 60,
+      cooldownSeconds: 1,
+      lifetimeSeconds: 4,
+    });
+  });
+
+  it('parses the special weapon definition', () => {
+    expect(parseSpecial(specialsJson)).toEqual({
+      id: 'hyakka-ryoran',
+      name: '奥義・百花繚乱',
+      kind: 'hyakka',
+      gaugeMax: 6000,
+      durationSeconds: 8,
+      fireRateMultiplier: 1.6,
+      paintRadiusMultiplier: 1.5,
+      inkCostMultiplier: 0.5,
+      bgmId: 'special',
+    });
+  });
+
+  it('parses the AI profiles', () => {
+    expect(parseAi(aiJson)).toEqual({
+      easy: {
+        reactionSeconds: 0.6,
+        aimJitterRadians: 0.12,
+        decisionIntervalSeconds: 0.5,
+        engageRange: 8,
+        weights: { paint: 1, chase: 0.5, support: 0.3, retreat: 0.6 },
+        specialUse: false,
+      },
+      normal: {
+        reactionSeconds: 0.35,
+        aimJitterRadians: 0.06,
+        decisionIntervalSeconds: 0.25,
+        engageRange: 12,
+        weights: { paint: 1, chase: 0.8, support: 0.5, retreat: 0.7 },
+        specialUse: true,
+      },
+      hard: {
+        reactionSeconds: 0.18,
+        aimJitterRadians: 0.02,
+        decisionIntervalSeconds: 0.2,
+        engageRange: 13,
+        weights: { paint: 1, chase: 0.9, support: 0.7, retreat: 0.8 },
+        specialUse: true,
+      },
+    });
+  });
+
+  it('parses the match configuration', () => {
+    expect(parseMatchConfig(matchJson)).toEqual({
+      durationSeconds: 180,
+      preSeconds: 3,
+      lastMinuteAt: 60,
+      countdownAt: 10,
+      settleSeconds: 0.5,
+      teamSize: 4,
+    });
   });
 });
 
@@ -282,6 +402,75 @@ describe('loader rejections', () => {
     if (!second || !first) throw new Error('test data has too few waypoints');
     second.id = first.id;
     expect(() => parseStage(bad)).toThrow(/waypoints\.1\.id: duplicate id/);
+  });
+
+  it('rejects a one-way waypoint link', () => {
+    const bad = structuredClone(stage);
+    const target = bad.waypoints.find((waypoint) => waypoint.id === 2);
+    if (!target) throw new Error('test data has no waypoint 2');
+    target.links = target.links.filter((link) => link !== 0);
+    expect(() => parseStage(bad)).toThrow(/waypoints\.0\.links\.0: one-way link to 2/);
+  });
+
+  it('rejects an unknown sub key', () => {
+    const sub = parseSub(subsJson);
+    expect(() => parseSub({ ...sub, extra: true })).toThrow(/extra/);
+  });
+
+  it('rejects a sub with a non-finite number', () => {
+    const sub = parseSub(subsJson);
+    expect(() => parseSub({ ...sub, gravity: Number.POSITIVE_INFINITY })).toThrow(/sub\.gravity/);
+    expect(() => parseSub({ ...sub, blastRadius: Number.NaN })).toThrow(/sub\.blastRadius/);
+  });
+
+  it('rejects an unknown special key', () => {
+    const special = parseSpecial(specialsJson);
+    expect(() => parseSpecial({ ...special, extra: true })).toThrow(/extra/);
+  });
+
+  it('rejects a non-positive special gauge', () => {
+    const special = parseSpecial(specialsJson);
+    expect(() => parseSpecial({ ...special, gaugeMax: 0 })).toThrow(/special\.gaugeMax/);
+  });
+
+  it('rejects an unknown AI key', () => {
+    const ai = parseAi(aiJson);
+    expect(() => parseAi({ ...ai, extra: true })).toThrow(/extra/);
+  });
+
+  it('rejects an AI profile with a negative weight', () => {
+    const ai = structuredClone(parseAi(aiJson));
+    ai.easy.weights.paint = -1;
+    expect(() => parseAi(ai)).toThrow(/ai\.easy\.weights\.paint/);
+  });
+
+  it('rejects a missing AI difficulty', () => {
+    expect(() => parseAi({ easy: parseAi(aiJson).easy })).toThrow(/ai\.normal/);
+  });
+
+  it('rejects an unknown match key', () => {
+    const match = parseMatchConfig(matchJson);
+    expect(() => parseMatchConfig({ ...match, extra: true })).toThrow(/extra/);
+  });
+
+  it('rejects an out-of-range match duration or team size', () => {
+    const match = parseMatchConfig(matchJson);
+    expect(() => parseMatchConfig({ ...match, durationSeconds: 30 })).toThrow(
+      /match\.durationSeconds/,
+    );
+    expect(() => parseMatchConfig({ ...match, durationSeconds: 301 })).toThrow(
+      /match\.durationSeconds/,
+    );
+    expect(() => parseMatchConfig({ ...match, teamSize: 5 })).toThrow(/match\.teamSize/);
+    expect(() => parseMatchConfig({ ...match, teamSize: 0 })).toThrow(/match\.teamSize/);
+  });
+
+  it('rejects non-finite or non-positive match timings', () => {
+    const match = parseMatchConfig(matchJson);
+    expect(() => parseMatchConfig({ ...match, preSeconds: 0 })).toThrow(/match\.preSeconds/);
+    expect(() => parseMatchConfig({ ...match, settleSeconds: Number.NaN })).toThrow(
+      /match\.settleSeconds/,
+    );
   });
 });
 

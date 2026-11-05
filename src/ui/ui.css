@@ -50,7 +50,6 @@ body {
 .pr-ui {
   --pr-team-color: #ff2e88;
   --pr-team-soft: rgba(255, 46, 136, 0.22);
-  --pr-ink: #2b2f5c;
   --pr-panel: rgba(255, 255, 255, 0.85);
   position: fixed;
   inset: 0;
@@ -299,6 +298,230 @@ body {
   text-align: right;
 }
 
+/* ---------- match clock ---------- */
+
+.pr-time {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  padding: 7px 28px 9px;
+  border-radius: 20px;
+  background: var(--pr-panel);
+  color: #2b2f5c;
+  font-size: clamp(34px, 6vw, 64px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-shadow: 0 2px 0 #ffffff;
+  transform: translateX(-50%);
+  box-shadow: 0 4px 0 rgba(43, 47, 92, 0.22);
+  pointer-events: none;
+}
+
+.pr-countdown {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  color: #ffffff;
+  font-size: clamp(96px, 22vw, 220px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  paint-order: stroke fill;
+  text-align: center;
+  text-shadow: 0 10px 0 rgba(43, 47, 92, 0.22);
+  transform: translate(-50%, -50%);
+  -webkit-text-stroke: 6px #2b2f5c;
+  pointer-events: none;
+  animation: pr-count-pop 1s ease-out infinite;
+}
+
+@keyframes pr-count-pop {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+/* ---------- call-out banner ---------- */
+
+.pr-banner {
+  position: absolute;
+  top: 24%;
+  left: 50%;
+  padding: 12px 36px 14px;
+  border-radius: 22px;
+  background: #ffc14d;
+  color: #2b2f5c;
+  font-size: clamp(22px, 4.4vw, 46px);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1.1;
+  text-align: center;
+  transform: translate(-50%, -16px) rotate(-2deg);
+  box-shadow: 0 7px 0 #b7832b;
+  opacity: 0;
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+  pointer-events: none;
+}
+
+.pr-banner.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0) rotate(-2deg);
+}
+
+/* ---------- team roster dots ---------- */
+
+.pr-roster {
+  position: absolute;
+  top: max(92px, calc(env(safe-area-inset-top) + 82px));
+  left: max(16px, env(safe-area-inset-left));
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--pr-panel);
+  box-shadow: 0 3px 0 rgba(43, 47, 92, 0.2);
+  pointer-events: none;
+}
+
+.pr-roster__dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--pr-dot-color, #b9b4ac);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.62);
+  transition:
+    background-color 160ms linear,
+    opacity 160ms linear,
+    transform 160ms ease-out;
+}
+
+.pr-roster__dot.is-enemy {
+  box-shadow:
+    inset 0 0 0 2px rgba(43, 47, 92, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.pr-roster__dot.is-down {
+  background: #b9b4ac;
+  opacity: 0.62;
+  transform: scale(0.78);
+}
+
+/* ---------- kill log ---------- */
+
+.pr-killlog {
+  position: absolute;
+  top: max(92px, calc(env(safe-area-inset-top) + 82px));
+  right: max(16px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  max-width: min(320px, 64vw);
+  pointer-events: none;
+}
+
+.pr-killlog__line {
+  margin: 0;
+  padding: 5px 13px 6px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--pr-panel);
+  color: #2b2f5c;
+  font-size: clamp(12px, 1.8vw, 16px);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 2px 0 rgba(43, 47, 92, 0.18);
+  transition: opacity 400ms ease-out;
+}
+
+.pr-killlog__line.is-faded {
+  opacity: 0;
+}
+
+/* ---------- special gauge ---------- */
+
+.pr-gauge {
+  position: absolute;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: center;
+  pointer-events: none;
+}
+
+.pr-gauge__ring {
+  --pr-gauge-fill: 0%;
+  position: relative;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  background: conic-gradient(var(--pr-team-color) var(--pr-gauge-fill), rgba(255, 255, 255, 0.48) 0);
+  box-shadow:
+    0 4px 0 rgba(43, 47, 92, 0.22),
+    inset 0 0 0 3px rgba(255, 255, 255, 0.55);
+  transition: box-shadow 200ms ease-out;
+}
+
+.pr-gauge__ring::after {
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: var(--pr-panel);
+  content: "";
+}
+
+.pr-gauge__label {
+  padding: 3px 10px 4px;
+  border-radius: 999px;
+  background: var(--pr-panel);
+  color: #2b2f5c;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: 0 2px 0 rgba(43, 47, 92, 0.18);
+}
+
+.pr-gauge.is-full .pr-gauge__ring {
+  box-shadow:
+    0 0 0 5px rgba(255, 193, 77, 0.72),
+    0 0 26px 12px rgba(255, 193, 77, 0.68),
+    0 4px 0 rgba(43, 47, 92, 0.22);
+  animation: pr-gauge-glow 1.15s ease-in-out infinite;
+}
+
+.pr-gauge.is-full .pr-gauge__label {
+  background: #ffc14d;
+  color: #2b2f5c;
+}
+
+@keyframes pr-gauge-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.28);
+  }
+}
+
 /* ---------- crosshair ---------- */
 
 .pr-crosshair {
@@ -333,6 +556,22 @@ body {
 .pr-crosshair::after {
   width: 2px;
   height: 6px;
+}
+
+.pr-charge {
+  --pr-charge-fill: 0%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: conic-gradient(var(--pr-team-color) var(--pr-charge-fill), rgba(255, 255, 255, 0.24) 0);
+  box-shadow: 0 0 0 2px rgba(43, 47, 92, 0.3);
+  transform: translate(-50%, -50%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  pointer-events: none;
 }
 
 /* ---------- overlays ---------- */
@@ -477,15 +716,46 @@ body {
   text-shadow: 0 3px 0 rgba(255, 255, 255, 0.85);
 }
 
-.pr-paused__hint {
-  margin: 0;
-  padding: 8px 20px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
+.pr-paused__button {
+  min-width: min(280px, 72vw);
+  min-height: 64px;
+  /* Overlays ignore pointer events; the pause buttons must not. */
+  pointer-events: auto;
+}
+
+.pr-paused__quit {
+  min-height: 56px;
+  border: 3px solid rgba(43, 47, 92, 0.3);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
   color: #2b2f5c;
-  font-size: clamp(15px, 2.2vw, 20px);
-  font-weight: 800;
+  font-family: inherit;
+  font-size: clamp(18px, 3vw, 24px);
+  font-weight: 900;
   letter-spacing: 0.08em;
+  box-shadow: 0 3px 0 rgba(43, 47, 92, 0.18);
+  cursor: pointer;
+}
+
+.pr-paused__quit:hover,
+.pr-paused__quit:focus-visible {
+  background: #fff;
+  outline: 3px solid #2b2f5c;
+  outline-offset: 3px;
+}
+
+.pr-paused__reason {
+  max-width: 34em;
+  margin: 0;
+  color: rgba(43, 47, 92, 0.66);
+  font-size: clamp(13px, 1.9vw, 17px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
+.pr-paused__reason:empty {
+  display: none;
 }
 
 /* Portrait warning is CSS-only: the element is always present and appears
@@ -493,6 +763,7 @@ body {
 .pr-orientation {
   position: absolute;
   inset: 0;
+  z-index: 40;
   display: none;
   flex-direction: column;
   gap: 18px;
@@ -520,9 +791,42 @@ body {
   box-shadow: 0 5px 0 rgba(43, 47, 92, 0.18);
 }
 
-@media (orientation: portrait) {
+/* Portrait warning lives at the app root, so it covers menus as well as the
+   match. Touch devices only: a mouse-driven portrait window still works. */
+@media (orientation: portrait) and (any-pointer: coarse) {
   .pr-orientation {
     display: flex;
+  }
+}
+
+/* ---------- start gate ---------- */
+
+.pr-start-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: max(72px, calc(env(safe-area-inset-bottom) + 56px));
+  pointer-events: none;
+}
+
+.pr-start-gate__button {
+  min-height: 72px;
+  padding: 12px 46px;
+  font-size: 28px;
+  pointer-events: auto;
+  animation: pr-start-gate-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes pr-start-gate-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
   }
 }
 
@@ -668,19 +972,146 @@ body {
     padding: 6px 16px;
   }
 
+  .pr-time {
+    top: max(8px, env(safe-area-inset-top));
+    padding: 5px 20px 7px;
+    font-size: clamp(28px, 5vw, 46px);
+  }
+
+  .pr-roster,
+  .pr-killlog {
+    top: max(76px, calc(env(safe-area-inset-top) + 68px));
+  }
+
+  .pr-gauge__ring {
+    width: 62px;
+    height: 62px;
+  }
+
   .pr-debug__body {
     width: min(300px, 72vw);
     max-height: 64vh;
   }
 }
 
+/* Short landscape phones: keep the HUD in the corners so the timer, hearts
+   and paint meter never sit under the thumb buttons. Tested at 844 x 390. */
+@media (max-height: 480px) {
+  .pr-hp {
+    top: max(8px, env(safe-area-inset-top));
+    bottom: auto;
+    left: max(10px, env(safe-area-inset-left));
+    gap: 4px;
+    align-items: center;
+  }
+
+  .pr-hp__heart {
+    width: 22px;
+    height: 21px;
+  }
+
+  .pr-gourd {
+    top: max(40px, calc(env(safe-area-inset-top) + 32px));
+    bottom: auto;
+    left: max(10px, env(safe-area-inset-left));
+    width: 40px;
+    height: 58px;
+  }
+
+  .pr-gourd__cap {
+    top: -5px;
+    width: 14px;
+    height: 7px;
+    border-width: 2px;
+    border-radius: 4px 4px 2px 2px;
+  }
+
+  .pr-form {
+    top: max(106px, calc(env(safe-area-inset-top) + 98px));
+    bottom: auto;
+    left: max(10px, env(safe-area-inset-left));
+    min-width: 54px;
+    padding: 3px 8px 4px;
+    border-left-width: 4px;
+    border-radius: 10px;
+    font-size: 12px;
+  }
+
+  .pr-score {
+    top: max(8px, env(safe-area-inset-top));
+    gap: 12px;
+  }
+
+  .pr-score__team {
+    gap: 5px;
+    padding: 4px 12px;
+    font-size: 12px;
+  }
+
+  .pr-time {
+    top: max(6px, env(safe-area-inset-top));
+    padding: 3px 14px 4px;
+    border-radius: 15px;
+    font-size: 28px;
+  }
+
+  .pr-roster {
+    top: max(7px, env(safe-area-inset-top));
+    left: max(90px, calc(env(safe-area-inset-left) + 80px));
+    gap: 3px;
+    padding: 3px 6px;
+  }
+
+  .pr-roster__dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .pr-killlog {
+    top: max(66px, calc(env(safe-area-inset-top) + 58px));
+    max-width: min(200px, 46vw);
+  }
+
+  .pr-killlog__line {
+    padding: 3px 9px 4px;
+    font-size: 11px;
+  }
+
+  /* Clear of the fire and sub buttons: 56 px ring, 300 px from the right. */
+  .pr-gauge {
+    right: max(300px, calc(env(safe-area-inset-right) + 290px));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    gap: 3px;
+  }
+
+  .pr-gauge__ring {
+    width: 56px;
+    height: 56px;
+  }
+
+  .pr-gauge__ring::after {
+    inset: 7px;
+  }
+
+  .pr-gauge__label {
+    padding: 2px 7px 3px;
+    font-size: 11px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pr-start__drip {
+  .pr-start__drip,
+  .pr-countdown,
+  .pr-gauge.is-full .pr-gauge__ring {
     animation: none;
   }
 
   .pr-hp__heart-fill,
-  .pr-gourd__fill {
+  .pr-gourd__fill,
+  .pr-banner,
+  .pr-killlog__line,
+  .pr-roster__dot,
+  .pr-gauge__ring {
     transition: none;
   }
 }

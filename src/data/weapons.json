@@ -3,6 +3,7 @@
     "id": "iro-shuriken",
     "name": "彩手裏剣",
     "kind": "projectile",
+    "specialGainPerCell": 1,
     "intervalSeconds": 0.125,
     "inkCost": 0.9,
     "damage": 28,
@@ -13,5 +14,38 @@
     "trailSpacing": 0.5,
     "trailRadius": 0.3,
     "lifetimeSeconds": 3
+  },
+  {
+    "id": "oofude",
+    "name": "大筆",
+    "kind": "brush",
+    "specialGainPerCell": 0.8,
+    "rollInkPerSec": 6,
+    "rollWidth": 1.6,
+    "rollSpacing": 0.25,
+    "rollSpeedMultiplier": 0.75,
+    "rollDamage": 40,
+    "swingIntervalSeconds": 0.5,
+    "swingReach": 2.4,
+    "swingArcRadians": 1.2,
+    "swingDamage": 100,
+    "swingPaintRadius": 1.2,
+    "swingInkCost": 8
+  },
+  {
+    "id": "naga-fukiya",
+    "name": "長吹き矢",
+    "kind": "charge",
+    "specialGainPerCell": 0.8,
+    "fullChargeSeconds": 1,
+    "minChargeFraction": 0.25,
+    "rangeMin": 8,
+    "rangeFull": 26,
+    "damageMin": 40,
+    "damageFull": 100,
+    "lineRadius": 0.45,
+    "lineSpacing": 0.4,
+    "inkCostFull": 18,
+    "chargeMoveMultiplier": 0.5
   }
 ]

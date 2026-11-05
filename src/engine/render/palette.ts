@@ -23,4 +23,10 @@ export const PALETTE = {
   garb: 0x2b2f5c,
   cloud: 0xffffff,
   smoke: 0xf5f0e6,
+  harborOrange: 0xe8743b,
+  harborYellow: 0xf2c14e,
+  harborBlue: 0x3f8fc4,
+  harborGreen: 0x4fa36b,
+  sea: 0x4fc3d9,
+  concrete: 0xcfc7b8,
 } as const;

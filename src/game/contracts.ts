@@ -1,7 +1,8 @@
 import type { CellValue, EntityId, Face, SurfaceHit, SurfaceId, TeamId, Tick, Vec3 } from '../core/types';
-import type { GameEvent } from '../core/events';
+import type { GameEvent, MatchPhase } from '../core/events';
 import type { InputActions } from '../core/actions';
-import type { PlayerStateName, ProjectileView, WorldSnapshot } from '../core/snapshot';
+import type { BombView, PlayerStateName, ProjectileView, WorldSnapshot } from '../core/snapshot';
+import type { AiProfile, StageData, Weapon } from './data/schemas';
 
 /* ---------- physics: src/game/physics ---------- */
 
@@ -87,6 +88,32 @@ export interface PlayerState {
   /** Previous tick's dive and jump buttons, for edge detection. */
   prevDive: boolean;
   prevJump: boolean;
+  weaponId: string;
+  /** Seconds before the next sub throw. */
+  subCooldown: number;
+  kills: number;
+  deaths: number;
+  /** Cells this player has painted. */
+  paintCells: number;
+  special: SpecialState;
+  /** Scale on target speed set each tick by the weapon, 1 when idle. */
+  moveMultiplier: number;
+  /** Weapon charge in 0..1. */
+  charge: number;
+}
+
+export interface SpecialState {
+  gauge: number;
+  /** Seconds of active special left; 0 when inactive. */
+  activeLeft: number;
+  /** Previous tick's special button, for edge detection. */
+  prevButton: boolean;
+}
+
+export interface SpecialModifiers {
+  fireRateMul: number;
+  paintMul: number;
+  inkCostMul: number;
 }
 
 /** Applied to a player from outside, e.g. a projectile hit. */
@@ -109,6 +136,12 @@ export interface ShooterState {
   ink: number;
   /** False while diving, down, or locked out. */
   canFire: boolean;
+  weaponId: string;
+  /** Fire button held this tick. */
+  holdFire: boolean;
+  /** Grounded, needed for rolling. */
+  grounded: boolean;
+  mods: SpecialModifiers;
 }
 
 export interface TargetState {
@@ -124,6 +157,12 @@ export interface FireResult {
   fired: boolean;
   inkSpent: number;
   events: GameEvent[];
+  /** Charge in 0..1, 0 for weapons without charging. */
+  charging: number;
+  /** Scale on the shooter's move speed this tick. */
+  moveMultiplier: number;
+  /** Melee and instant hits resolved this tick. */
+  hits: DamageHit[];
 }
 
 export interface StepResult {
@@ -132,16 +171,87 @@ export interface StepResult {
 }
 
 export interface IWeaponSystem {
-  /** Call once per tick per shooter holding fire. Enforces the interval and the ink cost. */
-  tryFire(shooter: ShooterState, tick: Tick): FireResult;
+  /** Call every tick for every shooter, held or not: charge and roll weapons need releases. Enforces interval and ink. */
+  tryFire(shooter: ShooterState, targets: readonly TargetState[], tick: Tick): FireResult;
   /** Advances all projectiles by one fixed step. */
   step(dt: number, targets: readonly TargetState[]): StepResult;
   projectiles(): readonly ProjectileView[];
 }
 
+export interface ISubSystem {
+  /** Call on a rising sub-button edge. Enforces ink and player cooldown is the caller's. */
+  tryThrow(thrower: ShooterState, tick: Tick): FireResult;
+  step(dt: number, targets: readonly TargetState[]): StepResult;
+  bombs(): readonly BombView[];
+}
+
+/* ---------- ai: src/game/ai ---------- */
+
+export type Waypoint = StageData['waypoints'][number];
+
+/** Read-only world for one bot decision. */
+export interface AiWorldView {
+  tick: Tick;
+  self: PlayerState;
+  allies: readonly PlayerState[];
+  enemies: readonly PlayerState[];
+  paint: Pick<IPaintGrid, 'sampleHit' | 'counts'>;
+  collision: Pick<ICollision, 'raycast'>;
+  waypoints: readonly Waypoint[];
+  phase: MatchPhase;
+  /** Weapon of this bot, to choose range behaviour. */
+  weapon: Weapon;
+}
+
+export interface IAiController {
+  /** Called every tick. Re-evaluates goals only at the profile's interval. */
+  decide(view: AiWorldView): InputActions;
+}
+
+export type AiFactory = (profile: AiProfile) => IAiController;
+
+/* ---------- match clock: src/game/match ---------- */
+
+export interface IMatchClock {
+  /** Advances one fixed tick and returns phase, countdown and voice events. */
+  step(): GameEvent[];
+  phase(): MatchPhase;
+  timeLeft(): number;
+  /** False during 'pre' and after time is up. */
+  inputsEnabled(): boolean;
+  /** True once the settle delay after time-up has passed; the score is final from then on. */
+  settled(): boolean;
+}
+
+export interface MatchPlayerResult {
+  id: EntityId;
+  team: TeamId;
+  paintCells: number;
+  kills: number;
+  deaths: number;
+}
+
+export interface MatchResult {
+  /** null is a draw. */
+  winner: TeamId | null;
+  /** Percent of paintable cells per team, 0..100. */
+  ratio: [number, number];
+  players: MatchPlayerResult[];
+}
+
 /* ---------- simulation: src/game/sim (organizer) ---------- */
+
+export interface RosterEntry {
+  id: EntityId;
+  team: TeamId;
+  weaponId: string;
+  /** 'dummy' stands still, for training targets. */
+  control: 'local' | 'ai' | 'dummy';
+}
 
 export interface ISimulation {
   step(inputs: ReadonlyMap<EntityId, InputActions>): GameEvent[];
   snapshot(): WorldSnapshot;
+  /** null until the match has settled. */
+  result(): MatchResult | null;
 }

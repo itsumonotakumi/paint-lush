@@ -1,0 +1,15 @@
+{
+  "id": "saien-dama",
+  "name": "彩煙玉",
+  "kind": "smokeBomb",
+  "inkCost": 40,
+  "throwSpeed": 14,
+  "throwPitchRadians": 0.6,
+  "gravity": 20,
+  "restitution": 0.3,
+  "fuseSeconds": 1.2,
+  "blastRadius": 2.2,
+  "damage": 60,
+  "cooldownSeconds": 1,
+  "lifetimeSeconds": 4
+}

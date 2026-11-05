@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ペイントラッシュ！ ピンクとみずいろのインクしぶき">
+  <title>ペイントラッシュ！</title>
+  <defs>
+    <linearGradient id="sunset" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB36B"/>
+      <stop offset="0.52" stop-color="#FF8AB8"/>
+      <stop offset="1" stop-color="#FFC46B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF2BE" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FFF2BE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#sunset)"/>
+  <circle cx="256" cy="304" r="176" fill="url(#glow)"/>
+  <circle cx="256" cy="330" r="92" fill="#FFE7A0" opacity="0.85"/>
+  <g fill="#1FB9B0">
+    <path d="M256 128c24 0 46 14 58 34 20-12 46-6 58 14 12 20 4 46-16 58 16 18 14 44-4 60-14 12-34 14-50 6-2 24-22 42-46 42-20 0-38-12-46-30-22 14-52 6-64-16-12-22-2-50 20-62-18-12-22-36-10-54 12-18 36-22 54-12 6-22 24-40 46-40z" transform="translate(14 20)"/>
+    <circle cx="146" cy="180" r="28"/>
+    <circle cx="372" cy="168" r="22"/>
+    <circle cx="132" cy="332" r="20"/>
+    <circle cx="382" cy="342" r="30"/>
+    <circle cx="260" cy="108" r="18"/>
+    <circle cx="226" cy="410" r="16"/>
+  </g>
+  <g fill="#FF5FA2">
+    <path d="M256 128c24 0 46 14 58 34 20-12 46-6 58 14 12 20 4 46-16 58 16 18 14 44-4 60-14 12-34 14-50 6-2 24-22 42-46 42-20 0-38-12-46-30-22 14-52 6-64-16-12-22-2-50 20-62-18-12-22-36-10-54 12-18 36-22 54-12 6-22 24-40 46-40z"/>
+    <circle cx="152" cy="196" r="22"/>
+    <circle cx="364" cy="186" r="18"/>
+    <circle cx="144" cy="318" r="15"/>
+    <circle cx="370" cy="330" r="22"/>
+    <circle cx="268" cy="118" r="13"/>
+    <circle cx="236" cy="396" r="12"/>
+  </g>
+  <path d="M206 196c16-16 42-18 58-6 8 6 12 16 10 26-4 18-26 28-44 20-18-8-26-26-24-40z" fill="#FFC1D9" opacity="0.9"/>
+  <circle cx="196" cy="214" r="9" fill="#FFF6FA"/>
+  <circle cx="338" cy="286" r="7" fill="#B9F3EE"/>
+  <circle cx="282" cy="352" r="5" fill="#FFF6FA"/>
+</svg>

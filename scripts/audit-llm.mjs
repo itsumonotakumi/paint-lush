@@ -21,6 +21,7 @@ const headless = [
   [/Math\.random/, 'unseeded random in simulation'],
   [/from\s+['"]three/, 'three in headless layer'],
   [/\b(window|document|localStorage|navigator)\./, 'browser global in headless layer'],
+  [/Date\.now|performance\.now/, 'wall clock in simulation'],
 ];
 const testsOnly = [
   [/\b(it|test|describe)\.(skip|only|todo)\b/, 'disabled or focused test'],
@@ -39,9 +40,16 @@ let findings = 0;
 for (const file of walk('src')) {
   const isTest = file.endsWith('.test.ts');
   const isHeadless = /^src\/(core|game)\//.test(file);
-  const rules = [...everywhere, ...(isHeadless ? headless : []), ...(isTest ? testsOnly : [])];
+  const isServiceWorker = file.startsWith('src/sw/');
+  const base = isServiceWorker ? everywhere.filter(([, label]) => label !== 'network access') : everywhere;
+  const rules = [...base, ...(isHeadless ? headless : []), ...(isTest ? testsOnly : [])];
   readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
+    const isComment = /^\s*(\*|\/\/|\/\*)/.test(line);
     for (const [pattern, label] of rules) {
+      // Comments may use the English word "any"; negative assertions in service worker tests may name banned APIs.
+      if (label === 'type escape' && isComment) continue;
+      if (label === 'wall clock in simulation' && isTest) continue;
+      if (label === 'message channel' && isServiceWorker && isTest && line.includes('.not.')) continue;
       if (pattern.test(line)) {
         findings += 1;
         process.stdout.write(`${file}:${index + 1}: ${label}: ${line.trim()}\n`);
@@ -49,7 +57,7 @@ for (const file of walk('src')) {
     }
   });
 }
-const EXPECTED_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
+const EXPECTED_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const html = readFileSync('index.html', 'utf8');
 if (!html.includes(EXPECTED_CSP)) {
   findings += 1;

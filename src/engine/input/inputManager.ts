@@ -2,7 +2,7 @@ import { emptyActions } from '../../core/actions';
 import type { InputActions, InputDevice } from '../../core/actions';
 import { FIXED_DT } from '../../core/types';
 import type { KeyBindings } from '../../game/data/schemas';
-import type { IInputSource } from '../ports';
+import type { IInputSource, ITouchControls } from '../ports';
 
 /** Minimum subset of the browser Gamepad shape (standard mapping). */
 export interface GamepadLike {
@@ -18,6 +18,8 @@ export interface InputDeps {
   isPointerLocked: () => boolean;
   bindings: KeyBindings;
   sensitivity: { mouse: number; stick: number; invertY: boolean };
+  /** Optional on-screen controls; read once per poll and merged into actions. */
+  touch?: ITouchControls;
 }
 
 /** Radial stick deadzone. Values inside it read as zero and are rescaled outside. */
@@ -44,6 +46,22 @@ function finiteOr(value: number, fallback: number): number {
 
 function nonNegativeFinite(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** True when a source produced any input this poll. */
+function hasActivity(actions: InputActions): boolean {
+  return (
+    actions.move[0] !== 0 ||
+    actions.move[1] !== 0 ||
+    actions.look[0] !== 0 ||
+    actions.look[1] !== 0 ||
+    actions.fire ||
+    actions.jump ||
+    actions.dive ||
+    actions.sub ||
+    actions.special ||
+    actions.pause
+  );
 }
 
 /** Reads a possibly-missing axis without trusting the array length. */
@@ -94,6 +112,7 @@ function radialDeadzone(x: number, y: number, out: { x: number; y: number }): vo
  */
 export function createInputManager(deps: InputDeps): IInputSource {
   const { keyboardTarget, pointerTarget, getGamepads, isPointerLocked, bindings, sensitivity } = deps;
+  const touchSource = deps.touch;
 
   const heldCodes = new Set<string>();
   const boundCodes = new Set<string>(Object.values(bindings));
@@ -259,6 +278,8 @@ export function createInputManager(deps: InputDeps): IInputSource {
     let sub = false;
     let special = false;
     let pause = false;
+    let touchLookX = 0;
+    let touchLookY = 0;
 
     const pad = firstConnectedPad();
     if (pad !== null) {
@@ -277,7 +298,8 @@ export function createInputManager(deps: InputDeps): IInputSource {
       gameLookY = lookStick.y * stickSensitivity * stickPitchSign * FIXED_DT;
 
       fire = buttonValue(buttons, 7) > TRIGGER_THRESHOLD;
-      dive = buttonValue(buttons, 6) > TRIGGER_THRESHOLD;
+      // B (1) mirrors the left trigger so the pause overlay can map it to やめる.
+      dive = buttonValue(buttons, 6) > TRIGGER_THRESHOLD || buttonPressed(buttons, 1);
       jump = buttonPressed(buttons, 0);
       sub = buttonPressed(buttons, 5);
       special = buttonPressed(buttons, 3);
@@ -304,8 +326,37 @@ export function createInputManager(deps: InputDeps): IInputSource {
       moveY /= magnitude;
     }
 
+    if (touchSource !== undefined) {
+      const touch = touchSource.read();
+      // Whichever movement vector is pushed further wins; they never add up.
+      const touchMagnitude = Math.hypot(touch.move[0], touch.move[1]);
+      const currentMagnitude = Math.hypot(moveX, moveY);
+      if (Number.isFinite(touchMagnitude) && touchMagnitude > currentMagnitude) {
+        moveX = finiteOr(touch.move[0], 0);
+        moveY = finiteOr(touch.move[1], 0);
+      }
+      touchLookX = finiteOr(touch.look[0], 0);
+      touchLookY = finiteOr(touch.look[1], 0);
+      fire = fire || touch.fire === true;
+      jump = jump || touch.jump === true;
+      dive = dive || touch.dive === true;
+      sub = sub || touch.sub === true;
+      special = special || touch.special === true;
+      pause = pause || touch.pause === true;
+      if (hasActivity(touch)) device = 'touch';
+    }
+
+    const finalMagnitude = Math.hypot(moveX, moveY);
+    if (finalMagnitude > 1) {
+      moveX /= finalMagnitude;
+      moveY /= finalMagnitude;
+    }
+
     actions.move = [finiteOr(moveX, 0), finiteOr(moveY, 0)];
-    actions.look = [finiteOr(lookX + gameLookX, 0), finiteOr(lookY + gameLookY, 0)];
+    actions.look = [
+      finiteOr(lookX + gameLookX + touchLookX, 0),
+      finiteOr(lookY + gameLookY + touchLookY, 0),
+    ];
     actions.fire = fire || heldCodes.has(bindings.fire);
     actions.jump = jump || heldCodes.has(bindings.jump);
     actions.dive = dive || heldCodes.has(bindings.dive);
@@ -318,6 +369,19 @@ export function createInputManager(deps: InputDeps): IInputSource {
     lookY = 0;
 
     return actions;
+  };
+
+  /**
+   * Forgets keyboard/mouse state and any look delta queued since the last
+   * poll. Gamepad state is read live on every poll, so it needs no reset.
+   * Used when pausing, where a keyup that happens outside the page would
+   * otherwise leave a key stuck down forever.
+   */
+  const reset = (): void => {
+    heldCodes.clear();
+    lookX = 0;
+    lookY = 0;
+    touchSource?.reset();
   };
 
   const dispose = (): void => {
@@ -336,5 +400,5 @@ export function createInputManager(deps: InputDeps): IInputSource {
 
   const lastDevice = (): InputDevice => device;
 
-  return { poll, lastDevice, dispose };
+  return { poll, reset, lastDevice, dispose };
 }

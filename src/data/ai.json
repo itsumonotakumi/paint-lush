@@ -1,0 +1,41 @@
+{
+  "easy": {
+    "reactionSeconds": 0.6,
+    "aimJitterRadians": 0.12,
+    "decisionIntervalSeconds": 0.5,
+    "engageRange": 8,
+    "weights": {
+      "paint": 1.0,
+      "chase": 0.5,
+      "support": 0.3,
+      "retreat": 0.6
+    },
+    "specialUse": false
+  },
+  "normal": {
+    "reactionSeconds": 0.35,
+    "aimJitterRadians": 0.06,
+    "decisionIntervalSeconds": 0.25,
+    "engageRange": 12,
+    "weights": {
+      "paint": 1.0,
+      "chase": 0.8,
+      "support": 0.5,
+      "retreat": 0.7
+    },
+    "specialUse": true
+  },
+  "hard": {
+    "reactionSeconds": 0.18,
+    "aimJitterRadians": 0.02,
+    "decisionIntervalSeconds": 0.2,
+    "engageRange": 13,
+    "weights": {
+      "paint": 1.0,
+      "chase": 0.9,
+      "support": 0.7,
+      "retreat": 0.8
+    },
+    "specialUse": true
+  }
+}

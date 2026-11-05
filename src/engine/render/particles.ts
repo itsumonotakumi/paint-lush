@@ -47,6 +47,15 @@ export const LEAF_LIFE = 0.8;
 export const SMOKE_SCALE_START = 0.3;
 export const SMOKE_SCALE_END = 1.4;
 
+/** Droplets thrown by one smoke-bomb burst. */
+export const BOMB_DROPLETS = 24;
+/** Smoke puffs layered under the bomb droplets. */
+export const BOMB_SMOKE = 6;
+export const BOMB_LIFE = 0.7;
+export const CHARGE_DROPLETS = 4;
+export const SWING_DROPLETS = 6;
+export const SWING_LIFE = 0.35;
+
 export const CONFETTI_COUNT = 120;
 export const CONFETTI_LIFE = 3;
 
@@ -428,6 +437,58 @@ const CONFETTI_SPEC: BurstSpec = {
   spread: 2.4,
 };
 
+const BOMB_SPEC: BurstSpec = {
+  count: BOMB_DROPLETS,
+  speedMin: 3,
+  speedMax: 6,
+  life: BOMB_LIFE,
+  accelY: DROPLET_GRAVITY,
+  sizeStart: 1,
+  sizeEnd: 0,
+  minUp: 0.12,
+  spinMax: 9,
+  spread: 0.28,
+};
+
+const BOMB_SMOKE_SPEC: BurstSpec = {
+  count: BOMB_SMOKE,
+  speedMin: 0.6,
+  speedMax: 1.4,
+  life: SMOKE_LIFE,
+  accelY: 0.8,
+  sizeStart: SMOKE_SCALE_START,
+  sizeEnd: SMOKE_SCALE_END * 1.2,
+  minUp: 0.1,
+  spinMax: 1.1,
+  spread: 0.3,
+};
+
+const CHARGE_SPEC: BurstSpec = {
+  count: CHARGE_DROPLETS,
+  speedMin: 0.7,
+  speedMax: 1.8,
+  life: 0.24,
+  accelY: 0.6,
+  sizeStart: 0.7,
+  sizeEnd: 0,
+  minUp: 0.2,
+  spinMax: 8,
+  spread: 0.08,
+};
+
+const SWING_SPEC: BurstSpec = {
+  count: SWING_DROPLETS,
+  speedMin: 2,
+  speedMax: 4,
+  life: SWING_LIFE,
+  accelY: DROPLET_GRAVITY,
+  sizeStart: 0.85,
+  sizeEnd: 0,
+  minUp: 0.05,
+  spinMax: 10,
+  spread: 0.12,
+};
+
 /** Owns the three fixed pools and the paint-burst throttle. */
 export class ParticleSystem {
   readonly droplets: ParticlePool;
@@ -470,6 +531,22 @@ export class ParticleSystem {
   /** 120 confetti pieces alternating between the two team colours. */
   spawnConfetti(pos: Vec3Like, teamA: Rgb, teamB: Rgb): void {
     this.droplets.spawnBurst(pos, CONFETTI_SPEC, teamA, teamB, this.rng);
+  }
+
+  /** A smoke bomb burst: 24 team droplets plus six smoke puffs. */
+  spawnBombBurst(pos: Vec3Like, color: Rgb, smokeColor: Rgb): void {
+    this.droplets.spawnBurst(pos, BOMB_SPEC, color, null, this.rng);
+    this.smoke.spawnBurst(pos, BOMB_SMOKE_SPEC, smokeColor, null, this.rng);
+  }
+
+  /** A few warm sparks while a charge weapon builds up. */
+  spawnCharge(pos: Vec3Like, color: Rgb): void {
+    this.droplets.spawnBurst(pos, CHARGE_SPEC, color, null, this.rng);
+  }
+
+  /** A short brush-swing arc of droplets. */
+  spawnSwing(pos: Vec3Like, color: Rgb): void {
+    this.droplets.spawnBurst(pos, SWING_SPEC, color, null, this.rng);
   }
 
   update(dt: number): void {

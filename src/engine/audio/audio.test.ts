@@ -149,11 +149,15 @@ class FakeContext implements AudioContextLike {
 
 const listener = { x: 0, y: 0, z: 0 };
 
-function setup(bgm?: BgmSource) {
+function setup(
+  bgm?: BgmSource,
+  createBgm?: (context: AudioContextLike, output: AudioNodeLike) => BgmSource,
+) {
   const context = new FakeContext();
   const audio = createAudio({
     createContext: () => context,
     ...(bgm === undefined ? {} : { bgm }),
+    ...(createBgm === undefined ? {} : { createBgm }),
   });
   return { context, audio };
 }
@@ -181,8 +185,8 @@ describe('createAudio', () => {
       },
     });
 
-    expect(() => audio.handle({ t: 'shoot', weapon: 'test', pos: listener }, listener)).not.toThrow();
-    expect(() => audio.handle({ t: 'paint', team: 0, cells: 9, pos: listener }, listener)).not.toThrow();
+    expect(() => audio.handle({ t: 'shoot', weapon: 'test', pos: listener }, listener, 1)).not.toThrow();
+    expect(() => audio.handle({ t: 'paint', team: 0, cells: 9, pos: listener }, listener, 1)).not.toThrow();
     expect(created).toBe(0);
     expect(context.oscillators.length).toBe(0);
 
@@ -212,16 +216,16 @@ describe('createAudio', () => {
     const { audio, context } = setup();
     await audio.unlock();
 
-    audio.handle({ t: 'paint', team: 0, cells: 4, pos: listener }, listener);
+    audio.handle({ t: 'paint', team: 0, cells: 4, pos: listener }, listener, 1);
     expect(context.oscillators.length).toBe(2);
 
-    audio.handle({ t: 'paint', team: 0, cells: 6, pos: listener }, listener);
+    audio.handle({ t: 'paint', team: 0, cells: 6, pos: listener }, listener, 1);
     context.currentTime = 0.02;
-    audio.handle({ t: 'paint', team: 0, cells: 6, pos: listener }, listener);
+    audio.handle({ t: 'paint', team: 0, cells: 6, pos: listener }, listener, 1);
     expect(context.oscillators.length).toBe(2);
 
     context.currentTime = PAINT_INTERVAL_SECONDS;
-    audio.handle({ t: 'paint', team: 0, cells: 7, pos: listener }, listener);
+    audio.handle({ t: 'paint', team: 0, cells: 7, pos: listener }, listener, 1);
     expect(context.oscillators.length).toBe(4);
 
     const expected = seSpecFor({ t: 'paint', team: 0, cells: 19, pos: listener });
@@ -235,19 +239,19 @@ describe('createAudio', () => {
     await audio.unlock();
 
     const land: GameEvent = { t: 'land', id: 1, pos: listener };
-    for (let i = 0; i < MAX_VOICES; i += 1) audio.handle(land, listener);
+    for (let i = 0; i < MAX_VOICES; i += 1) audio.handle(land, listener, 1);
 
     expect(context.panners.length).toBe(MAX_VOICES);
     const created = sourceCount(context);
     expect(created).toBe(MAX_VOICES * 2);
 
     // Paint is lower priority than land, so the new voice is dropped.
-    audio.handle({ t: 'paint', team: 0, cells: 1, pos: listener }, listener);
+    audio.handle({ t: 'paint', team: 0, cells: 1, pos: listener }, listener, 1);
     expect(context.panners.length).toBe(MAX_VOICES);
     expect(sourceCount(context)).toBe(created);
 
     // Special start outranks land: one voice is disconnected and replaced.
-    audio.handle({ t: 'special', phase: 'start' }, listener);
+    audio.handle({ t: 'special', id: 1, phase: 'start' }, listener, 1);
     expect(context.panners.length).toBe(MAX_VOICES + 1);
     expect(context.panners.filter((panner) => panner.disconnected).length).toBe(1);
     expect(context.panners.filter((panner) => !panner.disconnected).length).toBe(MAX_VOICES);
@@ -260,7 +264,7 @@ describe('createAudio', () => {
 
     const peakAt = (z: number): number => {
       const before = context.gains.length;
-      audio.handle({ t: 'impact', pos: { x: 0, y: 0, z } }, listener);
+      audio.handle({ t: 'impact', pos: { x: 0, y: 0, z } }, listener, 1);
       const envelope = context.gains[before];
       return envelope?.gain.maxValue ?? -1;
     };
@@ -274,7 +278,7 @@ describe('createAudio', () => {
     expect(mid).toBeLessThan(full);
 
     const before = context.gains.length;
-    audio.handle({ t: 'impact', pos: { x: 0, y: 0, z: 45 } }, listener);
+    audio.handle({ t: 'impact', pos: { x: 0, y: 0, z: 45 } }, listener, 1);
     expect(context.gains.length).toBe(before);
   });
 
@@ -282,10 +286,10 @@ describe('createAudio', () => {
     const { audio, context } = setup();
     await audio.unlock();
 
-    audio.handle({ t: 'impact', pos: { x: 5, y: 0, z: 0 } }, listener);
+    audio.handle({ t: 'impact', pos: { x: 5, y: 0, z: 0 } }, listener, 1);
     expect(context.panners[0]?.pan.value).toBeCloseTo(0.5);
 
-    audio.handle({ t: 'impact', pos: { x: -50, y: 0, z: 0 } }, listener);
+    audio.handle({ t: 'impact', pos: { x: -50, y: 0, z: 0 } }, listener, 1);
     expect(context.panners.length).toBe(1);
   });
 
@@ -316,11 +320,131 @@ describe('createAudio', () => {
     expect(stopped).toHaveLength(1);
   });
 
+  it('creates injected music in unlock and connects it to the bgm bus', async () => {
+    const created: Array<{ context: AudioContextLike; output: AudioNodeLike }> = [];
+    const started: Array<{ id: string; when: number }> = [];
+    const source: BgmSource = {
+      start(id, when) {
+        started.push({ id, when });
+      },
+      stop() {
+        // Not used here.
+      },
+    };
+    const { audio, context } = setup(undefined, (ctx, output) => {
+      created.push({ context: ctx, output });
+      return source;
+    });
+
+    audio.setBgm('menu');
+    expect(created).toHaveLength(0);
+
+    await audio.unlock();
+    expect(created).toHaveLength(1);
+    expect(created[0]?.context).toBe(context);
+    expect(created[0]?.output).toBe(context.gains[0]);
+    expect(started).toEqual([{ id: 'menu', when: 0 }]);
+
+    await audio.unlock();
+    expect(created).toHaveLength(1);
+  });
+
+  it('ignores repeated bgm ids and remembers the id requested before unlock', async () => {
+    const started: string[] = [];
+    const stopped: number[] = [];
+    const source: BgmSource = {
+      start(id) {
+        started.push(id);
+      },
+      stop(when) {
+        stopped.push(when);
+      },
+    };
+    const { audio } = setup(undefined, () => source);
+
+    audio.setBgm('menu');
+    audio.setBgm('menu');
+    expect(started).toHaveLength(0);
+
+    await audio.unlock();
+    expect(started).toEqual(['menu']);
+
+    audio.setBgm('menu');
+    expect(started).toEqual(['menu']);
+
+    audio.setBgm('battle');
+    expect(started).toEqual(['menu', 'battle']);
+    audio.setBgm('battle');
+    expect(started).toEqual(['menu', 'battle']);
+
+    audio.setBgm(null);
+    expect(stopped).toHaveLength(1);
+    audio.setBgm(null);
+    expect(stopped).toHaveLength(1);
+
+    audio.setBgm('battle');
+    expect(started).toEqual(['menu', 'battle', 'battle']);
+  });
+
+  it('skips special and charge cues that belong to another player', async () => {
+    const { audio, context } = setup();
+    await audio.unlock();
+
+    audio.handle({ t: 'special', id: 2, phase: 'start' }, listener, 1);
+    audio.handle({ t: 'charge', id: 2, level: 2 }, listener, 1);
+    expect(context.panners).toHaveLength(0);
+
+    audio.handle({ t: 'special', id: 1, phase: 'start' }, listener, 1);
+    audio.handle({ t: 'charge', id: 1, level: 2 }, listener, 1);
+    expect(context.panners).toHaveLength(2);
+  });
+
+  it('routes voice to the voice bus and countdown/ui to the se bus without attenuation', async () => {
+    const { audio, context } = setup();
+    await audio.unlock();
+    const far = { x: 400, y: 0, z: 400 };
+
+    const take = (event: GameEvent) => {
+      const pannerIndex = context.panners.length;
+      const gainIndex = context.gains.length;
+      audio.handle(event, far, 1);
+      return {
+        panner: context.panners[pannerIndex],
+        envelope: context.gains[gainIndex],
+      };
+    };
+
+    const voice = take({ t: 'voice', line: 'start' });
+    expect(voice.panner?.connected[0]).toBe(context.gains[2]);
+    expect(voice.envelope?.gain.maxValue).toBeGreaterThan(0);
+
+    const countdown = take({ t: 'countdown', n: 3 });
+    expect(countdown.panner?.connected[0]).toBe(context.gains[1]);
+    expect(countdown.envelope?.gain.maxValue).toBeGreaterThan(0);
+
+    const ui = take({ t: 'ui', kind: 'ok' });
+    expect(ui.panner?.connected[0]).toBe(context.gains[1]);
+    expect(ui.envelope?.gain.maxValue).toBeGreaterThan(0);
+  });
+
+  it('keeps delay-based jingle layers alive until their tail ends', async () => {
+    const { audio, context } = setup();
+    await audio.unlock();
+
+    audio.handle({ t: 'voice', line: 'win' }, listener, 1);
+    expect(context.oscillators.some((node) => (node.startedAt ?? 0) > 0)).toBe(true);
+
+    vi.advanceTimersByTime(1500);
+    expect(context.panners[0]?.disconnected).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(context.panners[0]?.disconnected).toBe(true);
+  });
+
   it('disconnects every node after the voice ends', async () => {
     const { audio, context } = setup();
     await audio.unlock();
 
-    audio.handle({ t: 'land', id: 1, pos: listener }, listener);
+    audio.handle({ t: 'land', id: 1, pos: listener }, listener, 1);
     expect(context.panners[0]?.disconnected).toBe(false);
 
     vi.advanceTimersByTime(1000);

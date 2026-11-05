@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DataTexture, RedFormat, UnsignedByteType, Vector3 } from 'three';
+import { DataTexture, RGFormat, UnsignedByteType, Vector3 } from 'three';
 import {
   INK_FRAGMENT_SHADER,
   INK_VERTEX_SHADER,
@@ -9,10 +9,10 @@ import type { InkUniformArgs, InkUniforms } from './inkShader';
 
 function makeTexture(): DataTexture {
   const texture = new DataTexture(
-    new Uint8Array([255, 0, 1, 255]),
+    new Uint8Array([255, 0, 0, 255, 0, 0, 0, 0]),
     2,
     2,
-    RedFormat,
+    RGFormat,
     UnsignedByteType,
   );
   texture.needsUpdate = true;
@@ -102,22 +102,46 @@ describe('ink shaders', () => {
     );
   });
 
-  it('keeps the per-team texel coverage and 255-as-unpainted convention', () => {
-    expect(INK_FRAGMENT_SHADER).toContain('texelFetch(uPaint, texel, 0).r * 255.0');
-    expect(INK_FRAGMENT_SHADER).toContain('1.0 - step(0.5, abs(value - 0.0))');
-    expect(INK_FRAGMENT_SHADER).toContain('1.0 - step(0.5, abs(value - 1.0))');
-    expect(INK_FRAGMENT_SHADER).toContain('cellCoverage(baseI) * w00');
+  it('reads the precomputed RG coverage with hardware bilinear taps only', () => {
+    expect(INK_FRAGMENT_SHADER).toContain('texture(uPaint, vUv).rg');
+    expect(INK_FRAGMENT_SHADER).toContain('vec2 halfTexel = texel * 0.5;');
+    expect(INK_FRAGMENT_SHADER).not.toContain('texelFetch');
+    expect(INK_FRAGMENT_SHADER).not.toContain('* 255.0');
+
+    const reads = occurrences(INK_FRAGMENT_SHADER, 'texture(');
+    expect(reads).toBeGreaterThanOrEqual(1);
+    expect(reads).toBeLessThanOrEqual(6);
   });
 
-  it('blurs coverage with a 3x3 tent instead of hashing whole cells', () => {
-    expect(INK_FRAGMENT_SHADER).toContain('+ 2.0 * (cM0 + c0M + c0P + cP0)');
-    expect(INK_FRAGMENT_SHADER).toContain('+ 4.0 * c00) / 16.0;');
-    // The old per-cell hash threshold caused stair-stepped edges.
-    expect(INK_FRAGMENT_SHADER).not.toContain('hash(hashCell)');
-    expect(INK_FRAGMENT_SHADER).not.toContain('edgeNoise');
+  it('builds the soft edge from one centre sample and four half-cell taps', () => {
+    expect(INK_FRAGMENT_SHADER).toContain('vec2 cL = texture(uPaint, vUv - vec2(halfTexel.x, 0.0)).rg;');
+    expect(INK_FRAGMENT_SHADER).toContain('vec2 cR = texture(uPaint, vUv + vec2(halfTexel.x, 0.0)).rg;');
+    expect(INK_FRAGMENT_SHADER).toContain('vec2 cD = texture(uPaint, vUv - vec2(0.0, halfTexel.y)).rg;');
+    expect(INK_FRAGMENT_SHADER).toContain('vec2 cU = texture(uPaint, vUv + vec2(0.0, halfTexel.y)).rg;');
+    expect(INK_FRAGMENT_SHADER).toContain(
+      'vec2 coverage = 0.4 * c00 + 0.15 * (cL + cR + cD + cU);',
+    );
   });
 
-  it('wobbles the threshold with smooth value noise on a 0.6 m grid', () => {
+  it('skips gloss and ink when all five samples are unpainted', () => {
+    expect(INK_FRAGMENT_SHADER).toContain('float inkPresence = c00.x + c00.y');
+    expect(INK_FRAGMENT_SHADER).toContain('if (inkPresence > 0.0) {');
+    expect(INK_FRAGMENT_SHADER).toContain(
+      'vec3 lit = baseTint * baseExposure * cornerShade;',
+    );
+  });
+
+  it('derives the gradient from the same four taps', () => {
+    expect(INK_FRAGMENT_SHADER).toContain(
+      '(cR.x + cR.y) - (cL.x + cL.y)',
+    );
+    expect(INK_FRAGMENT_SHADER).toContain(
+      'vec2 dC = 2.0 * vec2(',
+    );
+    expect(INK_FRAGMENT_SHADER).toContain('max(length(dC) * 0.5, 0.0001)');
+  });
+
+  it('wobbles the threshold with cheap smooth value noise on a 0.6 m grid', () => {
     expect(INK_FRAGMENT_SHADER).toContain('float valueNoise(vec2 p)');
     expect(INK_FRAGMENT_SHADER).toContain('f * f * (3.0 - 2.0 * f)');
     expect(INK_FRAGMENT_SHADER).toContain('valueNoise(metres / 0.6)');
@@ -128,6 +152,7 @@ describe('ink shaders', () => {
   });
 
   it('exposes diffuse light without clipping the cream base', () => {
+    expect(INK_FRAGMENT_SHADER).toContain('0.62 + 0.38 * baseDiffuse');
     expect(INK_FRAGMENT_SHADER).toContain('0.62 + 0.38 * diffuse');
     expect(INK_FRAGMENT_SHADER).toContain('max(dot(diffNormal, l), 0.0)');
     expect(INK_FRAGMENT_SHADER).not.toContain('uAmbient');

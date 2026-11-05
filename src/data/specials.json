@@ -1,0 +1,11 @@
+{
+  "id": "hyakka-ryoran",
+  "name": "奥義・百花繚乱",
+  "kind": "hyakka",
+  "gaugeMax": 6000,
+  "durationSeconds": 8,
+  "fireRateMultiplier": 1.6,
+  "paintRadiusMultiplier": 1.5,
+  "inkCostMultiplier": 0.5,
+  "bgmId": "special"
+}

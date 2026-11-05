@@ -820,6 +820,179 @@ describe('real collision and paint grid', () => {
   });
 });
 
+describe('weapon and match state', () => {
+  it('starts with the default weapon, zeroed stats and an idle special', () => {
+    const cfg = config();
+    const p = createPlayer(42, 1, spawn, cfg);
+    expect(p.weaponId).toBe('iro-shuriken');
+    expect(p.subCooldown).toBe(0);
+    expect(p.kills).toBe(0);
+    expect(p.deaths).toBe(0);
+    expect(p.paintCells).toBe(0);
+    expect(p.special).toEqual({ gauge: 0, activeLeft: 0, prevButton: false });
+    expect(p.moveMultiplier).toBe(1);
+    expect(p.charge).toBe(0);
+  });
+
+  it('accepts an explicit weapon id', () => {
+    const cfg = config();
+    const p = createPlayer(1, 0, spawn, cfg, 'mizu-roll');
+    expect(p.weaponId).toBe('mizu-roll');
+  });
+
+  it('gives every player its own special state object', () => {
+    const cfg = config();
+    const a = createPlayer(1, 0, spawn, cfg);
+    const b = createPlayer(2, 1, spawn, cfg);
+    expect(a.special).not.toBe(b.special);
+    a.special.gauge = 0.5;
+    expect(b.special.gauge).toBe(0);
+  });
+});
+
+describe('move multiplier', () => {
+  it('scales stance speed', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+    const p = createPlayer(ID, 0, spawn, cfg);
+    p.moveMultiplier = 2;
+    run(p, actions({ move: [1, 0] }), env, cfg, 120);
+    expect(p.vel.x).toBeCloseTo(cfg.walkSpeed * 2, 6);
+  });
+
+  it('scales air speed', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+    const p = createPlayer(ID, 0, { x: 0, y: 10, z: 0 }, cfg);
+    p.state = 'air';
+    p.moveMultiplier = 1.5;
+    run(p, actions({ move: [1, 0] }), env, cfg, 30);
+    expect(p.state).toBe('air');
+    expect(p.vel.x).toBeCloseTo(cfg.walkSpeed * 1.5, 6);
+  });
+
+  it('leaves dive speed alone', () => {
+    const cfg = config();
+    const { env, paint } = makeEnv();
+    paint.groundTeam = 0;
+    const p = createPlayer(ID, 0, spawn, cfg);
+    p.moveMultiplier = 2;
+    run(p, actions({ dive: true, move: [1, 0] }), env, cfg, 120);
+    expect(p.vel.x).toBeCloseTo(cfg.diveSpeed, 6);
+  });
+
+  it('keeps a wild multiplier finite and non-negative', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+
+    const nan = createPlayer(ID, 0, spawn, cfg);
+    nan.moveMultiplier = Number.NaN;
+    run(nan, actions({ move: [1, 0] }), env, cfg, 120);
+    expect(nan.moveMultiplier).toBe(1);
+    expect(nan.vel.x).toBeCloseTo(cfg.walkSpeed, 6);
+
+    const inf = createPlayer(ID, 0, spawn, cfg);
+    inf.moveMultiplier = Number.POSITIVE_INFINITY;
+    run(inf, actions({ move: [1, 0] }), env, cfg, 120);
+    expect(Number.isFinite(inf.vel.x)).toBe(true);
+    expect(inf.moveMultiplier).toBe(1);
+    expect(inf.vel.x).toBeCloseTo(cfg.walkSpeed, 6);
+
+    const huge = createPlayer(ID, 0, spawn, cfg);
+    huge.moveMultiplier = 1e300;
+    run(huge, actions({ move: [1, 0] }), env, cfg, 120);
+    expect(Number.isFinite(huge.vel.x)).toBe(true);
+    expect(huge.vel.x).toBeCloseTo(cfg.walkSpeed * 8, 6);
+
+    const negative = createPlayer(ID, 0, spawn, cfg);
+    negative.moveMultiplier = -3;
+    negative.vel.x = 4;
+    run(negative, actions({ move: [1, 0] }), env, cfg, 60);
+    expect(negative.moveMultiplier).toBe(0);
+    expect(negative.vel.x).toBe(0);
+  });
+});
+
+describe('sub cooldown', () => {
+  it('ticks down to zero while alive', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+    const p = createPlayer(ID, 0, spawn, cfg);
+    p.subCooldown = 0.2;
+    stepPlayer(p, actions(), env, cfg, DT);
+    expect(p.subCooldown).toBeCloseTo(0.2 - DT, 10);
+    run(p, actions(), env, cfg, 30);
+    expect(p.subCooldown).toBe(0);
+  });
+
+  it('ticks down while dead and clamps at zero for a huge step', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+    const p = createPlayer(ID, 0, spawn, cfg);
+    applyDamage(p, { target: ID, attacker: 9, damage: 500, pos: { x: 0, y: 0, z: 0 } }, cfg);
+    p.subCooldown = 0.1;
+    stepPlayer(p, actions(), env, cfg, DT);
+    expect(p.subCooldown).toBeCloseTo(0.1 - DT, 10);
+    stepPlayer(p, actions(), env, cfg, 1000);
+    expect(p.subCooldown).toBe(0);
+  });
+});
+
+describe('match counters and respawn reset', () => {
+  function hit(damage: number, attacker = 99): DamageHit {
+    return { target: ID, attacker, damage, pos: { x: 1, y: 2, z: 3 } };
+  }
+
+  it('increments deaths only on the killing blow', () => {
+    const cfg = config();
+    const p = createPlayer(ID, 0, spawn, cfg);
+    p.hp = 40;
+    applyDamage(p, hit(10), cfg);
+    expect(p.deaths).toBe(0);
+    p.hp = 10;
+    const events = applyDamage(p, hit(50), cfg);
+    expect(count(events, 'kill')).toBe(1);
+    expect(p.deaths).toBe(1);
+    applyDamage(p, hit(50), cfg);
+    expect(p.deaths).toBe(1);
+  });
+
+  it('does not credit kills itself; the caller reads the kill event', () => {
+    const cfg = config();
+    const p = createPlayer(ID, 0, spawn, cfg);
+    p.hp = 1;
+    const events = applyDamage(p, hit(50, 42), cfg);
+    expect(p.kills).toBe(0);
+    const kill = events.find((event) => event.t === 'kill');
+    expect(kill).toMatchObject({ killer: 42, victim: ID });
+  });
+
+  it('keeps the special gauge and stats on respawn but clears charge and active special', () => {
+    const cfg = config();
+    const { env } = makeEnv();
+    const p = createPlayer(ID, 0, spawn, cfg, 'mizu-roll');
+    p.kills = 3;
+    p.paintCells = 120;
+    p.special.gauge = 0.75;
+    p.special.activeLeft = 4;
+    p.charge = 0.6;
+    applyDamage(p, hit(500), cfg);
+    expect(p.deaths).toBe(1);
+
+    for (let i = 0; i < 400 && p.state !== 'stance'; i += 1) {
+      stepPlayer(p, actions(), env, cfg, DT);
+    }
+    expect(p.state).toBe('stance');
+    expect(p.special.gauge).toBe(0.75);
+    expect(p.special.activeLeft).toBe(0);
+    expect(p.charge).toBe(0);
+    expect(p.kills).toBe(3);
+    expect(p.deaths).toBe(1);
+    expect(p.paintCells).toBe(120);
+    expect(p.weaponId).toBe('mizu-roll');
+  });
+});
+
 describe('finite-value properties', () => {
   const arbNumber = fc.oneof(
     fc.double({ min: -1000, max: 1000 }),
@@ -867,6 +1040,11 @@ describe('finite-value properties', () => {
               p.fireLock,
               p.invuln,
               p.respawnTimer,
+              p.subCooldown,
+              p.moveMultiplier,
+              p.charge,
+              p.special.gauge,
+              p.special.activeLeft,
             ]) {
               expect(Number.isFinite(value)).toBe(true);
             }
@@ -882,6 +1060,10 @@ describe('finite-value properties', () => {
             expect(p.fireLock).toBeGreaterThanOrEqual(0);
             expect(p.invuln).toBeGreaterThanOrEqual(0);
             expect(p.respawnTimer).toBeGreaterThanOrEqual(0);
+            expect(p.subCooldown).toBeGreaterThanOrEqual(0);
+            expect(p.moveMultiplier).toBeGreaterThanOrEqual(0);
+            expect(p.moveMultiplier).toBeLessThanOrEqual(8);
+            expect(p.charge).toBeGreaterThanOrEqual(0);
           }
         },
       ),

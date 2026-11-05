@@ -62,8 +62,13 @@ export interface AudioContextLike {
 
 export interface AudioDeps {
   createContext: () => AudioContextLike;
-  /** Optional file/stream music player. Procedural SE is always synthesised here. */
+  /** Optional ready-made file/stream music player. Procedural SE is always synthesised here. */
   bgm?: BgmSource;
+  /**
+   * Builds the music player once, during unlock(), so it can connect to the
+   * already-created bgm bus. Takes precedence over `bgm` when both are present.
+   */
+  createBgm?: (context: AudioContextLike, output: AudioNodeLike) => BgmSource;
 }
 
 /** Simultaneous sound-effect voices. */
@@ -153,6 +158,10 @@ function eventPosition(event: GameEvent): Vec3 | null {
   switch (event.t) {
     case 'special':
     case 'phase':
+    case 'charge':
+    case 'countdown':
+    case 'voice':
+    case 'ui':
       return null;
     default:
       return event.pos;
@@ -206,6 +215,7 @@ export function createAudio(deps: AudioDeps): IAudio {
   const voices: Voice[] = [];
   let noiseBuffer: AudioBufferLike | null = null;
 
+  let bgmSource: BgmSource | null = null;
   let bgmId: string | null = null;
   let bgmStarted = false;
 
@@ -271,7 +281,12 @@ export function createAudio(deps: AudioDeps): IAudio {
     return weakest;
   }
 
-  function play(ctx: AudioContextLike, spec: SeSpec, spatial: Spatial): void {
+  function play(
+    ctx: AudioContextLike,
+    spec: SeSpec,
+    spatial: Spatial,
+    destination: AudioGainLike,
+  ): void {
     const now = safeTime(ctx);
     prune(now);
 
@@ -284,7 +299,7 @@ export function createAudio(deps: AudioDeps): IAudio {
 
     const panner = ctx.createStereoPanner();
     panner.pan.value = clamp(spatial.pan, -1, 1);
-    panner.connect(buses === null ? ctx.destination : buses.se);
+    panner.connect(destination);
 
     const nodes: Disconnectable[] = [panner];
     let end = now;
@@ -292,33 +307,35 @@ export function createAudio(deps: AudioDeps): IAudio {
 
     for (const layer of spec.layers) {
       const duration = clamp(layer.duration, 0.01, 4);
+      const delay = clamp(finiteOr(layer.delay ?? 0, 0), 0, 2);
+      const start = now + delay;
       const peak = clamp(layer.gain * spatial.attenuation, 0, 1);
       if (peak <= 0) continue;
 
       const envelope = ctx.createGain();
       envelope.connect(panner);
       nodes.push(envelope);
-      scheduleEnvelope(envelope.gain, now, duration, peak, layer.attack, layer.decay);
+      scheduleEnvelope(envelope.gain, start, duration, peak, layer.attack, layer.decay);
 
       if (layer.type === 'noise') {
         const source = ctx.createBufferSource();
         source.buffer = ensureNoiseBuffer(ctx);
         source.playbackRate.value = clamp(finiteOr(layer.startFreq, 3000) / 3000, 0.25, 4);
         source.connect(envelope);
-        source.start(now);
-        source.stop(now + duration);
+        source.start(start);
+        source.stop(start + duration);
         nodes.push(source);
       } else {
         const oscillator = ctx.createOscillator();
         oscillator.type = layer.type;
-        scheduleFrequency(oscillator.frequency, now, duration, layer.startFreq, layer.endFreq);
+        scheduleFrequency(oscillator.frequency, start, duration, layer.startFreq, layer.endFreq);
         oscillator.connect(envelope);
-        oscillator.start(now);
-        oscillator.stop(now + duration + 0.01);
+        oscillator.start(start);
+        oscillator.stop(start + duration + 0.01);
         nodes.push(oscillator);
       }
 
-      end = Math.max(end, now + duration);
+      end = Math.max(end, start + duration);
       layerCount += 1;
     }
 
@@ -357,15 +374,18 @@ export function createAudio(deps: AudioDeps): IAudio {
   }
 
   async function startAudio(): Promise<void> {
-    if (context === null) {
-      context = deps.createContext();
-      buses = {
-        bgm: makeBus(context, volumes.bgm),
-        se: makeBus(context, volumes.se),
-        voice: makeBus(context, volumes.voice),
+    let ctx = context;
+    let graph = buses;
+    if (ctx === null || graph === null) {
+      ctx = deps.createContext();
+      graph = {
+        bgm: makeBus(ctx, volumes.bgm),
+        se: makeBus(ctx, volumes.se),
+        voice: makeBus(ctx, volumes.voice),
       };
+      context = ctx;
+      buses = graph;
     }
-    const ctx = context;
 
     if (ctx.state !== 'running') {
       try {
@@ -375,8 +395,20 @@ export function createAudio(deps: AudioDeps): IAudio {
       }
     }
 
-    if (bgmId !== null && deps.bgm !== undefined && !bgmStarted) {
-      deps.bgm.start(bgmId, safeTime(ctx));
+    if (bgmSource === null) {
+      if (deps.createBgm !== undefined) {
+        try {
+          bgmSource = deps.createBgm(ctx, graph.bgm);
+        } catch {
+          bgmSource = deps.bgm ?? null;
+        }
+      } else {
+        bgmSource = deps.bgm ?? null;
+      }
+    }
+
+    if (bgmId !== null && bgmSource !== null && !bgmStarted) {
+      bgmSource.start(bgmId, safeTime(ctx));
       bgmStarted = true;
     }
   }
@@ -391,9 +423,12 @@ export function createAudio(deps: AudioDeps): IAudio {
       return unlockPromise;
     },
 
-    handle(event: GameEvent, listener: Vec3): void {
+    handle(event: GameEvent, listener: Vec3, localId: number): void {
       const ctx = context;
       if (ctx === null || buses === null) return;
+
+      // Only the listener hears their own special and charge cues.
+      if ((event.t === 'special' || event.t === 'charge') && event.id !== localId) return;
 
       const spec = event.t === 'paint' ? paintSpec(ctx, event) : seSpecFor(event);
       if (spec === null || spec.layers.length === 0) return;
@@ -404,20 +439,25 @@ export function createAudio(deps: AudioDeps): IAudio {
         spatial = spatialize(pos, listener);
         if (spatial.attenuation <= 0) return;
       }
-      play(ctx, spec, spatial);
+
+      // Voice lines and interface cues are close to the listener, never attenuated.
+      const destination = event.t === 'voice' ? buses.voice : buses.se;
+      play(ctx, spec, spatial, destination);
     },
 
     setBgm(id: string | null): void {
       const previous = bgmId;
       bgmId = id;
-      if (deps.bgm === undefined || context === null) return;
+      if (bgmSource === null || context === null) return;
 
       const when = safeTime(context);
       if (id === null) {
-        if (bgmStarted || previous !== null) deps.bgm.stop(when);
-        bgmStarted = false;
+        if (bgmStarted) {
+          bgmSource.stop(when);
+          bgmStarted = false;
+        }
       } else if (!bgmStarted || previous !== id) {
-        deps.bgm.start(id, when);
+        bgmSource.start(id, when);
         bgmStarted = true;
       }
     },

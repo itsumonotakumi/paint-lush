@@ -151,6 +151,37 @@ describe('createInputManager', () => {
     expect(actions.special).toBe(false);
   });
 
+  it('clears held keys and pending look on reset, and stays off without new input', () => {
+    const h = harness({ locked: true });
+    h.keyboardTarget.dispatchEvent(keyEvent('keydown', 'KeyW'));
+    h.pointerTarget.dispatchEvent(mouseEvent('mousemove', { movementX: 20, movementY: 10 }));
+    expect(h.input.poll().move).toEqual([0, 1]);
+
+    h.keyboardTarget.dispatchEvent(keyEvent('keydown', 'KeyW'));
+    h.keyboardTarget.dispatchEvent(keyEvent('keydown', 'Space'));
+    h.pointerTarget.dispatchEvent(mouseEvent('mousemove', { movementX: 20, movementY: 10 }));
+    h.input.reset();
+
+    const afterReset = h.input.poll();
+    expect(afterReset.move).toEqual([0, 0]);
+    expect(afterReset.look).toEqual([0, 0]);
+    expect(afterReset.jump).toBe(false);
+
+    // No keyup arrived after the reset, yet the key must stay released.
+    expect(h.input.poll().move).toEqual([0, 0]);
+
+    // A fresh keydown is the only thing that starts movement again.
+    h.keyboardTarget.dispatchEvent(keyEvent('keydown', 'KeyW'));
+    expect(h.input.poll().move).toEqual([0, 1]);
+  });
+
+  it('leaves live gamepad state readable across reset', () => {
+    const h = harness();
+    h.setPads([makePad([0, -1, 0, 0])]);
+    h.input.reset();
+    expect(h.input.poll().move).toEqual([0, 1]);
+  });
+
   it('maps action bindings and ORs keyboard with mouse buttons', () => {
     const h = harness();
     h.keyboardTarget.dispatchEvent(keyEvent('keydown', 'Space'));
@@ -356,6 +387,14 @@ describe('createInputManager', () => {
     const below = h.input.poll();
     expect(below.fire).toBe(false);
     expect(below.dive).toBe(false);
+  });
+
+  it('maps the B face button to dive for the pause overlay', () => {
+    const h = harness();
+    const buttons = neutralButtons();
+    buttons[1] = { pressed: true, value: 1 };
+    h.setPads([makePad([0, 0, 0, 0], buttons)]);
+    expect(h.input.poll().dive).toBe(true);
   });
 
   it('guards non-finite gamepad axes and button values', () => {

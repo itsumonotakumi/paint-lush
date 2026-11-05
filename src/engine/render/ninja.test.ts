@@ -1,14 +1,22 @@
-import { Mesh, MeshToonMaterial, Object3D, Scene } from 'three';
+import { Mesh, MeshBasicMaterial, MeshToonMaterial, Object3D, Scene } from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PlayerView, WorldSnapshot } from '../../core/snapshot';
 import type { GameEvent } from '../../core/events';
-import { createNinjas } from './ninja';
+import { createNinjas, weaponVisualKind } from './ninja';
 import { PALETTE } from './palette';
 import { createToonGradient } from './toon';
 import type { RenderModule } from './module';
 
 function snapshot(players: PlayerView[]): WorldSnapshot {
-  return { tick: 0, players, projectiles: [], counts: [0, 0] };
+  return {
+    tick: 0,
+    players,
+    projectiles: [],
+    bombs: [],
+    phase: 'play',
+    timeLeft: 60,
+    counts: [0, 0],
+  };
 }
 
 function player(overrides: Partial<PlayerView> = {}): PlayerView {
@@ -21,6 +29,11 @@ function player(overrides: Partial<PlayerView> = {}): PlayerView {
     pitch: 0,
     hp: 100,
     ink: 100,
+    weaponId: 'iro-shuriken',
+    gauge: 0,
+    specialActive: false,
+    charge: 0,
+    kills: 0,
     ...overrides,
   };
 }
@@ -39,6 +52,25 @@ function garbFlash(group: Object3D): number {
   });
   return hex;
 }
+
+function weaponNode(scene: Scene, role: string): Mesh | undefined {
+  let found: Mesh | undefined;
+  scene.traverse((node) => {
+    if (found === undefined && node instanceof Mesh && node.userData.weaponRole === role) {
+      found = node;
+    }
+  });
+  return found;
+}
+
+describe('weapon visual mapping', () => {
+  it('maps the three weapon ids to hand-held models', () => {
+    expect(weaponVisualKind('iro-shuriken')).toBe('shuriken');
+    expect(weaponVisualKind('oofude')).toBe('brush');
+    expect(weaponVisualKind('naga-fukiya')).toBe('blowgun');
+    expect(weaponVisualKind('mystery')).toBe('none');
+  });
+});
 
 describe('ninja render module', () => {
   let scene: Scene;
@@ -147,6 +179,73 @@ describe('ninja render module', () => {
 
     module.update(0.2, snapshot(players), snapshot(players), 0);
     expect(garbFlash(group)).toBe(0x000000);
+  });
+
+  it('hangs the matching weapon model on each ninja', () => {
+    const players = [
+      player({ id: 1, weaponId: 'iro-shuriken' }),
+      player({ id: 2, weaponId: 'oofude' }),
+      player({ id: 3, weaponId: 'naga-fukiya' }),
+    ];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+
+    expect(weaponNode(scene, 'shuriken')).toBeDefined();
+    expect(weaponNode(scene, 'brushHead')).toBeDefined();
+    expect(weaponNode(scene, 'blowgun')).toBeDefined();
+  });
+
+  it('brightens the blowgun tube with charge', () => {
+    const cold = [player({ id: 1, weaponId: 'naga-fukiya', charge: 0 })];
+    module.update(1 / 60, snapshot([]), snapshot(cold), 0);
+    const first = weaponNode(scene, 'blowgun');
+    if (!first || !(first.material instanceof MeshBasicMaterial)) throw new Error('no tube');
+    const dim = first.material.color.r;
+
+    const hot = [player({ id: 1, weaponId: 'naga-fukiya', charge: 1 })];
+    module.update(1 / 60, snapshot(cold), snapshot(hot), 0);
+    const second = weaponNode(scene, 'blowgun');
+    if (!second || !(second.material instanceof MeshBasicMaterial)) throw new Error('no tube');
+    expect(second.material.color.r).toBeGreaterThan(dim);
+  });
+
+  it('shows an eight-petal ring only while the special is active', () => {
+    const idle = [player({ id: 1 })];
+    module.update(1 / 60, snapshot([]), snapshot(idle), 0);
+    const group = groupsIn(scene)[0];
+    if (group === undefined) throw new Error('missing ninja group');
+    const ring = group.children[2];
+    if (ring === undefined) throw new Error('missing special ring');
+    expect(ring.visible).toBe(false);
+    expect(ring.children).toHaveLength(8);
+    for (const petal of ring.children) {
+      expect(petal instanceof Mesh).toBe(true);
+      if (petal instanceof Mesh) expect(petal.material).toBeInstanceOf(MeshBasicMaterial);
+    }
+
+    const active = [player({ id: 1, specialActive: true })];
+    module.update(1 / 60, snapshot(idle), snapshot(active), 0);
+    expect(ring.visible).toBe(true);
+  });
+
+  it('swings the brush on a swing event and settles again', () => {
+    const players = [player({ id: 1, weaponId: 'oofude' })];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+    const group = groupsIn(scene)[0];
+    if (group === undefined) throw new Error('missing ninja group');
+
+    let weapon: Object3D | null = null;
+    group.traverse((node) => {
+      if (node.userData.weaponKind === 'brush') weapon = node;
+    });
+    if (weapon === null) throw new Error('missing brush');
+    const brush = weapon as Object3D;
+
+    module.handle?.({ t: 'swing', id: 1, pos: { x: 0, y: 0, z: 0 } });
+    module.update(0.08, snapshot(players), snapshot(players), 0);
+    expect(Math.abs(brush.rotation.x)).toBeGreaterThan(0.1);
+
+    module.update(0.4, snapshot(players), snapshot(players), 0);
+    expect(brush.rotation.x).toBeCloseTo(0, 6);
   });
 
   it('disposes its own groups but keeps the scene and gradient usable', () => {

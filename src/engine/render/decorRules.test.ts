@@ -19,6 +19,9 @@ const SNAPSHOT: WorldSnapshot = {
   tick: 0,
   players: [],
   projectiles: [],
+  bombs: [],
+  phase: 'play',
+  timeLeft: 60,
   counts: [0, 0],
 };
 

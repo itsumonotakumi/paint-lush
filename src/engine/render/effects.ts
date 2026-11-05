@@ -14,6 +14,7 @@ import {
 } from 'three';
 import type { GameEvent } from '../../core/events';
 import type { WorldSnapshot } from '../../core/snapshot';
+import type { EntityId } from '../../core/types';
 import { PALETTE } from './palette';
 import { createToonMaterial } from './toon';
 import {
@@ -103,6 +104,7 @@ export function createEffects(deps: RenderModuleDeps): EffectsModule {
   const scratchColor = new Color();
 
   const focus: Vec3Like = { x: 0, y: 0, z: 0 };
+  const positionById = new Map<EntityId, Vec3Like>();
   const confettiOrigin: Vec3Like = { x: 0, y: CONFETTI_HEIGHT, z: 0 };
 
   let disposed = false;
@@ -143,8 +145,9 @@ export function createEffects(deps: RenderModuleDeps): EffectsModule {
   /** Remembers where the local player is so the finish confetti has a place to pop. */
   function trackFocus(curr: WorldSnapshot): void {
     let found = curr.players[0];
-    for (const player of curr.players) {
-      if (player.id === localPlayerId) {
+    for (let i = 0; i < curr.players.length; i += 1) {
+      const player = curr.players[i];
+      if (player !== undefined && player.id === localPlayerId) {
         found = player;
         break;
       }
@@ -153,6 +156,18 @@ export function createEffects(deps: RenderModuleDeps): EffectsModule {
     focus.x = finite(found.pos.x);
     focus.y = finite(found.pos.y);
     focus.z = finite(found.pos.z);
+    for (let i = 0; i < curr.players.length; i += 1) {
+      const player = curr.players[i];
+      if (player === undefined) continue;
+      let slot = positionById.get(player.id);
+      if (slot === undefined) {
+        slot = { x: 0, y: 0, z: 0 };
+        positionById.set(player.id, slot);
+      }
+      slot.x = finite(player.pos.x);
+      slot.y = finite(player.pos.y);
+      slot.z = finite(player.pos.z);
+    }
   }
 
   /* ---------- RenderModule ---------- */
@@ -188,8 +203,23 @@ export function createEffects(deps: RenderModuleDeps): EffectsModule {
         particles.spawnKill(event.pos, smokeColor, leafColor);
         break;
       case 'special':
+        // Only the local player's special changes this camera.
+        if (event.id !== localPlayerId) break;
         if (event.phase === 'start') fovState.start();
         else if (event.phase === 'end') fovState.end();
+        break;
+      case 'sub':
+        if (event.phase === 'burst') {
+          particles.spawnBombBurst(event.pos, teamColors[event.team], smokeColor);
+        }
+        break;
+      case 'charge': {
+        const pos = positionById.get(event.id) ?? focus;
+        particles.spawnCharge(pos, shootColor);
+        break;
+      }
+      case 'swing':
+        particles.spawnSwing(event.pos, shootColor);
         break;
       case 'phase':
         if (event.phase === 'finished') {

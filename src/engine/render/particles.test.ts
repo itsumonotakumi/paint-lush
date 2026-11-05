@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BOMB_DROPLETS,
+  BOMB_LIFE,
+  BOMB_SMOKE,
+  CHARGE_DROPLETS,
   CONFETTI_COUNT,
   CONFETTI_LIFE,
   DROPLET_CAPACITY,
@@ -14,6 +18,7 @@ import {
   SHAKE_AMPLITUDE,
   SHOOT_DROPLETS,
   SHOOT_FLASH_LIFE,
+  SWING_DROPLETS,
   ShakeState,
 } from './particles';
 import type { ParticlePool, Rgb } from './particles';
@@ -285,6 +290,32 @@ describe('field of view boost', () => {
     fov.end();
     fov.update(0.1);
     expect(fov.value()).toBe(0);
+  });
+});
+
+describe('smoke bomb and weapon sparks', () => {
+  it('throws 24 team droplets and six smoke puffs for a bomb burst', () => {
+    const system = new ParticleSystem();
+    system.spawnBombBurst({ x: 1, y: 0, z: 2 }, TEAM_B, WHITE);
+
+    expect(system.droplets.count).toBe(BOMB_DROPLETS);
+    expect(system.smoke.count).toBe(BOMB_SMOKE);
+    for (let i = 0; i < system.droplets.count; i += 1) {
+      expect(system.droplets.r[i] ?? 0).toBeCloseTo(TEAM_B.r, 5);
+      expect(system.droplets.g[i] ?? 0).toBeCloseTo(TEAM_B.g, 5);
+      expect(system.droplets.b[i] ?? 0).toBeCloseTo(TEAM_B.b, 5);
+      expect(system.droplets.lifeMax[i] ?? 0).toBeCloseTo(BOMB_LIFE, 5);
+    }
+  });
+
+  it('emits small sparks for charge and swing without touching smoke', () => {
+    const system = new ParticleSystem();
+    system.spawnCharge({ x: 0, y: 1, z: 0 }, YELLOW);
+    expect(system.droplets.count).toBe(CHARGE_DROPLETS);
+
+    system.spawnSwing({ x: 0, y: 1, z: 0 }, YELLOW);
+    expect(system.droplets.count).toBe(CHARGE_DROPLETS + SWING_DROPLETS);
+    expect(system.smoke.count).toBe(0);
   });
 });
 

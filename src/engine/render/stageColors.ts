@@ -1,16 +1,25 @@
 import type { Box, Face } from '../../core/types';
 
 /**
- * Per-surface base colours for the bright sunset castle town. Everything here
- * is a pure function of the stage geometry so the renderer can stay thin and
- * the colour rules can be tested without WebGL.
+ * Per-surface base colours for the bright stage art. Everything here is a pure
+ * function of the stage geometry so the renderer can stay thin and the colour
+ * rules can be tested without WebGL.
  */
 export const FLOOR_COLOR = 0xe9cfa0;
 export const PLASTER_COLOR = 0xfff4e0;
 export const PERIMETER_WALL_COLOR = 0xffefd5;
 
-/** Raised-block top colours, cycled so neighbouring rooftops read apart. */
+/** Raised-block top colours for the sunset castle town. */
 export const TOP_COLORS = [0xf4a65e, 0x7cc6a4, 0xf08fa0, 0x8fb8e8, 0xf2d16b] as const;
+
+/** Container hues for the harbour stage, cycled for point symmetry. */
+export const CONTAINER_COLORS = [0xe8743b, 0x3f8fc4, 0x4fa36b, 0xf2c14e] as const;
+
+/** Warm concrete floor of the harbour stage. */
+export const CONCRETE_FLOOR_COLOR = 0xcfc7b8;
+
+/** Stage id that switches to the container palette. */
+export const HARBOR_STAGE_ID = 'karakuri-port';
 
 /**
  * The top-face footprint of a stage box. `x` and `z` are the box centre while
@@ -57,12 +66,19 @@ export function boxTop(box: Box): BoxTop {
 /**
  * Chooses the base colour for one box face.
  *
- * Floor plate tops (y = 0) are warm stone. Raised tops cycle through the town
- * palette keyed on `|centre.x| + |centre.z|` so a mirrored pair of blocks gets
- * the same colour. Sides are plaster, except for the long, tall perimeter
- * walls which use a slightly deeper cream.
+ * The harbour stage uses concrete floors and a container palette for the tops
+ * and sides of raised blocks; other stages keep the warm castle-town palette.
+ * Both cycles are keyed on `|centre.x| + |centre.z|`, so point-symmetric boxes
+ * share a colour. Castle-town sides are plaster, except for the long, tall
+ * perimeter walls which use a slightly deeper cream.
  */
-export function surfaceBase(boxIndex: number, face: Face, top: BoxTop): number {
+export function surfaceBase(
+  boxIndex: number,
+  face: Face,
+  top: BoxTop,
+  stageId: string,
+): number {
+  const harbor = stageId === HARBOR_STAGE_ID;
   // The cycle deliberately ignores boxIndex so mirrored blocks match.
   const topY = safe(top.y, 0);
   const centreX = safe(top.x, 0);
@@ -71,17 +87,26 @@ export function surfaceBase(boxIndex: number, face: Face, top: BoxTop): number {
   const depth = positiveExtent(top.depth);
 
   if (face === '+y') {
-    if (topY <= 0) return FLOOR_COLOR;
-    const key = Math.round(Math.abs(centreX) + Math.abs(centreZ));
-    const cycle = TOP_COLORS.length;
-    const index = ((key % cycle) + cycle) % cycle;
-    return TOP_COLORS[index] ?? TOP_COLORS[0];
+    if (topY <= 0) return harbor ? CONCRETE_FLOOR_COLOR : FLOOR_COLOR;
+    const palette = harbor ? CONTAINER_COLORS : TOP_COLORS;
+    return cycleColor(palette, centreX, centreZ);
   }
 
-  if (face === '-y') return FLOOR_COLOR;
+  if (face === '-y') return harbor ? CONCRETE_FLOOR_COLOR : FLOOR_COLOR;
+  if (harbor && topY <= 0) return CONCRETE_FLOOR_COLOR;
 
   const longSide = Math.max(width, depth);
   const shortSide = Math.min(width, depth);
   const isPerimeterWall = topY >= 2 && longSide >= shortSide * 4;
-  return isPerimeterWall ? PERIMETER_WALL_COLOR : PLASTER_COLOR;
+  if (isPerimeterWall) return PERIMETER_WALL_COLOR;
+  if (harbor) return cycleColor(CONTAINER_COLORS, centreX, centreZ);
+  return PLASTER_COLOR;
+}
+
+/** Stable point-symmetric colour choice: mirrored boxes land on the same swatch. */
+function cycleColor(palette: readonly number[], centreX: number, centreZ: number): number {
+  const key = Math.round(Math.abs(centreX) + Math.abs(centreZ));
+  const cycle = palette.length;
+  const index = ((key % cycle) + cycle) % cycle;
+  return palette[index] ?? palette[0] ?? FLOOR_COLOR;
 }

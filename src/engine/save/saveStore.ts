@@ -1,4 +1,10 @@
-import { saveDataSchema, type SaveData } from '../../game/data/schemas';
+import {
+  saveDataSchema,
+  saveDataV1Schema,
+  type KeyBindings,
+  type SaveData,
+  type SaveDataV1,
+} from '../../game/data/schemas';
 import type { ISaveStore } from '../ports';
 
 /** Key used in `localStorage` (or any compatible storage). */
@@ -8,7 +14,23 @@ export const SAVE_KEY = 'paintrush.save';
 export const MAX_SAVE_BYTES = 65536;
 
 /** Current schema version. Older payloads are upgraded by `migrate`. */
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
+
+/** Keys that could mutate a prototype if copied into a plain object. */
+const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'prototype', 'constructor']);
+
+const DEFAULT_KEYS: KeyBindings = {
+  forward: 'KeyW',
+  back: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  fire: 'Mouse0',
+  jump: 'Space',
+  dive: 'ShiftLeft',
+  sub: 'KeyE',
+  special: 'KeyQ',
+  pause: 'Escape',
+};
 
 /**
  * Fresh defaults for a brand-new player. A new object is returned on every
@@ -22,18 +44,23 @@ export function defaultSave(): SaveData {
       mouseSensitivity: 0.001745,
       stickSensitivity: 2.094,
       invertY: false,
-      keys: {
-        forward: 'KeyW',
-        back: 'KeyS',
-        left: 'KeyA',
-        right: 'KeyD',
-        fire: 'Mouse0',
-        jump: 'Space',
-        dive: 'ShiftLeft',
-        sub: 'KeyE',
-        special: 'KeyQ',
-        pause: 'Escape',
-      },
+      keys: { ...DEFAULT_KEYS },
+      gyro: false,
+      quality: 'auto',
+      colorblind: false,
+      touchLayout: { scale: 1, offsetX: 0, offsetY: 0 },
+    },
+    records: {
+      matches: 0,
+      wins: 0,
+      weaponUses: {},
+      bestPaintCells: 0,
+    },
+    last: {
+      weaponId: 'iro-shuriken',
+      stageId: 'neon-town',
+      difficulty: 'normal',
+      durationSeconds: 180,
     },
   };
 }
@@ -43,15 +70,6 @@ type UnknownRecord = Record<string, unknown>;
 /** Upgrade step: takes the raw payload of one version and returns the next. */
 type Migration = (value: UnknownRecord) => unknown;
 
-/**
- * Migration chain keyed by the payload's `version`. Version 1 is the current
- * schema, so its step is the identity; unknown versions have no step and are
- * rejected instead of guessed at.
- */
-const migrations: Readonly<Record<number, Migration>> = {
-  1: (value) => value,
-};
-
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -59,6 +77,71 @@ function isRecord(value: unknown): value is UnknownRecord {
 function hasOwn(value: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
+
+/**
+ * Rejects any own key that could be interpreted as a prototype mutation.
+ * JSON.parse creates own `__proto__` keys, so this must run before zod sees
+ * the object. The depth limit keeps hostile nesting from exhausting the stack.
+ */
+function hasForbiddenKey(value: unknown, depth = 0): boolean {
+  if (depth > 16) return true;
+  if (value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (hasForbiddenKey(item, depth + 1)) return true;
+    }
+    return false;
+  }
+  for (const key of Object.keys(value)) {
+    if (FORBIDDEN_KEYS.has(key)) return true;
+    const child: unknown = Reflect.get(value, key);
+    if (hasForbiddenKey(child, depth + 1)) return true;
+  }
+  return false;
+}
+
+/** Builds a version 2 payload from validated version 1 settings. */
+function upgradeV1(v1: SaveDataV1): SaveData {
+  return {
+    version: 2,
+    settings: {
+      volume: { ...v1.settings.volume },
+      mouseSensitivity: v1.settings.mouseSensitivity,
+      stickSensitivity: v1.settings.stickSensitivity,
+      invertY: v1.settings.invertY,
+      keys: { ...v1.settings.keys },
+      gyro: false,
+      quality: 'auto',
+      colorblind: false,
+      touchLayout: { scale: 1, offsetX: 0, offsetY: 0 },
+    },
+    records: {
+      matches: 0,
+      wins: 0,
+      weaponUses: {},
+      bestPaintCells: 0,
+    },
+    last: {
+      weaponId: 'iro-shuriken',
+      stageId: 'neon-town',
+      difficulty: 'normal',
+      durationSeconds: 180,
+    },
+  };
+}
+
+/**
+ * Migration chain keyed by the payload's `version`. Version 2 is current, so
+ * its step is the identity; version 1 is validated and upgraded. Unknown
+ * versions have no step and are rejected instead of guessed at.
+ */
+const migrations: Readonly<Record<number, Migration>> = {
+  1: (value) => {
+    const parsed = saveDataV1Schema.safeParse(value);
+    return parsed.success ? upgradeV1(parsed.data) : null;
+  },
+  2: (value) => value,
+};
 
 /**
  * Applies the migration chain. Returns null for anything that is not a
@@ -110,6 +193,7 @@ export function createSaveStore(storage: Pick<Storage, 'getItem' | 'setItem'> | 
       if (typeof raw !== 'string') return defaultSave();
       if (utf8ByteLength(raw) > MAX_SAVE_BYTES) return defaultSave();
       const parsed: unknown = JSON.parse(raw);
+      if (hasForbiddenKey(parsed)) return defaultSave();
       const migrated = migrate(parsed);
       if (migrated === null) return defaultSave();
       const result = saveDataSchema.safeParse(migrated);
@@ -122,6 +206,7 @@ export function createSaveStore(storage: Pick<Storage, 'getItem' | 'setItem'> | 
   const save = (data: SaveData): boolean => {
     if (storage === null) return false;
     try {
+      if (hasForbiddenKey(data)) return false;
       const result = saveDataSchema.safeParse(data);
       if (!result.success) return false;
       const serialised: unknown = JSON.stringify(result.data);

@@ -74,6 +74,7 @@ function makeStage(): StageData {
     spawns: [[{ x: -1, y: 0, z: -1 }], [{ x: 1, y: 0, z: 1 }]],
     waypoints: [],
     bounds: { min: { x: -5, y: 0, z: -5 }, max: { x: 6, y: 3, z: 5 } },
+    bgm: 'battle',
   };
 }
 

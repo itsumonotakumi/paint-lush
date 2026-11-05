@@ -1,0 +1,59 @@
+{
+  "theme": "harbor",
+  "seed": 20261105,
+  "lantern": {
+    "spacing": 3,
+    "lowDetailSpacing": 6,
+    "height": 3.6,
+    "offset": 0.35,
+    "radius": 0.2,
+    "capRadius": 0.09
+  },
+  "banner": {
+    "offsets": [-14, -6, 6, 14],
+    "centerY": 3.8,
+    "offset": 0.06,
+    "width": 1.6,
+    "height": 0.8
+  },
+  "tree": {
+    "count": 8,
+    "outsideMin": 23,
+    "outsideMax": 29,
+    "trunkRadius": 0.22,
+    "trunkHeight": 2.2,
+    "leafRadius": 1.4
+  },
+  "mountain": {
+    "count": 4,
+    "z": -95,
+    "radius": 16,
+    "height": 8,
+    "spreadMin": -70,
+    "spreadMax": 70
+  },
+  "crane": {
+    "count": 2,
+    "xSpread": 14,
+    "z": -30,
+    "height": 15,
+    "jibLength": 10,
+    "swayRadians": 0.06,
+    "swaySpeed": 0.3
+  },
+  "sea": {
+    "count": 16,
+    "y": -0.08,
+    "size": 2.6,
+    "margin": 4
+  },
+  "cloud": {
+    "count": 6,
+    "minY": 17,
+    "maxY": 23,
+    "speed": 0.25,
+    "loopHalfWidth": 58,
+    "minRadius": 2,
+    "maxRadius": 3
+  }
+}

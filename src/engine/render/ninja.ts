@@ -1,12 +1,16 @@
 import {
+  AdditiveBlending,
   BackSide,
   BoxGeometry,
+  BufferAttribute,
   BufferGeometry,
   CapsuleGeometry,
   CylinderGeometry,
+  DoubleSide,
   Group,
   Mesh,
   MeshBasicMaterial,
+  PlaneGeometry,
   SphereGeometry,
   TorusGeometry,
 } from 'three';
@@ -33,8 +37,42 @@ const NO_FLASH_COLOR = 0x000000;
 const TAIL_FLUTTER = 9;
 /** Ripple lifetime in seconds. */
 const RIPPLE_SECONDS = 1;
+/** Seconds a brush swing animation lasts. */
+const SWING_SECONDS = 0.32;
+/** Petals in the special ring. */
+const SPECIAL_PETALS = 8;
+const SPECIAL_RING_RADIUS = 0.62;
+const TAU = Math.PI * 2;
+
+/** Which weapon model to hang from the right hand. */
+export type WeaponVisualKind = 'shuriken' | 'brush' | 'blowgun' | 'none';
+
+/** Maps a simulation weapon id to its hand-held model. */
+export function weaponVisualKind(weaponId: string): WeaponVisualKind {
+  if (weaponId === 'iro-shuriken') return 'shuriken';
+  if (weaponId === 'oofude') return 'brush';
+  if (weaponId === 'naga-fukiya') return 'blowgun';
+  return 'none';
+}
+
+/**
+ * Team-coloured glow strength for the blowgun tube. Charge 0 keeps the tube
+ * visible, charge 1 makes it shine at full brightness.
+ */
+export function chargeGlow(charge: number): number {
+  const value = Number.isFinite(charge) ? Math.min(1, Math.max(0, charge)) : 0;
+  return 0.35 + 0.65 * value;
+}
 
 type ToonMesh = Mesh<BufferGeometry, MeshToonMaterial>;
+type BasicMesh = Mesh<BufferGeometry, MeshBasicMaterial>;
+
+interface WeaponVisual {
+  kind: WeaponVisualKind;
+  group: Group;
+  spinner: BasicMesh | null;
+  glow: MeshBasicMaterial | null;
+}
 
 interface NinjaVisual {
   id: EntityId;
@@ -47,8 +85,16 @@ interface NinjaVisual {
   ripples: [ToonMesh, ToonMesh];
   teamMeshes: ToonMesh[];
   garbMaterial: MeshToonMaterial;
+  ring: Group;
+  ringPetals: BasicMesh[];
+  weapon: WeaponVisual | null;
+  weaponId: string;
+  teamHex: number;
   team: TeamId;
   flash: number;
+  swing: number;
+  /** Last update frame in which this visual was present in the snapshot. */
+  lastSeen: number;
 }
 
 function safe(n: number): number {
@@ -66,12 +112,71 @@ function jumpedTooFar(from: Vec3, to: Vec3): boolean {
   return dx * dx + dy * dy + dz * dz > SNAP_DISTANCE_SQUARED;
 }
 
+/** Linear lookup over the previous snapshot, avoiding a per-frame map rebuild. */
+function findPrevious(
+  players: readonly PlayerView[],
+  id: EntityId,
+): PlayerView | undefined {
+  for (let i = 0; i < players.length; i += 1) {
+    const player = players[i];
+    if (player !== undefined && player.id === id) return player;
+  }
+  return undefined;
+}
+
 function horizontalSpeed(previous: PlayerView, current: PlayerView, dtSec: number): number {
   if (!(dtSec > 0) || !Number.isFinite(dtSec)) return 0;
   const dx = safe(current.pos.x) - safe(previous.pos.x);
   const dz = safe(current.pos.z) - safe(previous.pos.z);
   const speed = Math.hypot(dx, dz) / dtSec;
   return Number.isFinite(speed) ? speed : 0;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+/** A chunky four-point shuriken, extruded a little so it reads from every side. */
+function createShurikenGeometry(): BufferGeometry {
+  const outer = 0.24;
+  const inner = 0.085;
+  const halfDepth = 0.035;
+  const rim: { x: number; y: number }[] = [];
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i / 8) * TAU;
+    const radius = i % 2 === 0 ? outer : inner;
+    rim.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+  }
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const push3 = (x: number, y: number, z: number, nx: number, ny: number, nz: number): void => {
+    positions.push(x, y, z);
+    normals.push(nx, ny, nz);
+  };
+
+  for (let i = 0; i < 8; i += 1) {
+    const p = rim[i];
+    const q = rim[(i + 1) % 8];
+    if (!p || !q) continue;
+    push3(0, 0, halfDepth, 0, 0, 1);
+    push3(p.x, p.y, halfDepth, 0, 0, 1);
+    push3(q.x, q.y, halfDepth, 0, 0, 1);
+    push3(0, 0, -halfDepth, 0, 0, -1);
+    push3(q.x, q.y, -halfDepth, 0, 0, -1);
+    push3(p.x, p.y, -halfDepth, 0, 0, -1);
+    push3(p.x, p.y, halfDepth, p.x, p.y, 0);
+    push3(q.x, q.y, halfDepth, q.x, q.y, 0);
+    push3(q.x, q.y, -halfDepth, q.x, q.y, 0);
+    push3(p.x, p.y, halfDepth, p.x, p.y, 0);
+    push3(q.x, q.y, -halfDepth, q.x, q.y, 0);
+    push3(p.x, p.y, -halfDepth, p.x, p.y, 0);
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+  return geometry;
 }
 
 /** Expands one ripple ring over its lifetime while thinning its vertical tube. */
@@ -128,6 +233,11 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
   const cordGeometry = trackGeometry(new BoxGeometry(0.03, 0.18, 0.03));
   const blobGeometry = trackGeometry(new SphereGeometry(0.55, 18, 12));
   const rippleGeometry = trackGeometry(new TorusGeometry(0.5, 0.03, 6, 28));
+  const shurikenGeometry = trackGeometry(createShurikenGeometry());
+  const brushHandleGeometry = trackGeometry(new CylinderGeometry(0.035, 0.045, 1.05, 8));
+  const brushHeadGeometry = trackGeometry(new CylinderGeometry(0.14, 0.09, 0.34, 10));
+  const blowgunGeometry = trackGeometry(new CylinderGeometry(0.028, 0.032, 1.2, 8));
+  const petalGeometry = trackGeometry(new PlaneGeometry(0.16, 0.28));
 
   /* ---------- shared materials ---------- */
 
@@ -146,11 +256,55 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     trackMaterial(createToonMaterial(safeHex(teamColors[1]), gradient)),
   ];
 
+  const timberMaterial = trackMaterial(createToonMaterial(PALETTE.timber, gradient));
+
+  const teamStarMaterials: [MeshBasicMaterial, MeshBasicMaterial] = [
+    trackBasic(
+      new MeshBasicMaterial({
+        color: safeHex(teamColors[0]),
+        side: DoubleSide,
+        toneMapped: false,
+      }),
+    ),
+    trackBasic(
+      new MeshBasicMaterial({
+        color: safeHex(teamColors[1]),
+        side: DoubleSide,
+        toneMapped: false,
+      }),
+    ),
+  ];
+
+  const teamPetalMaterials: [MeshBasicMaterial, MeshBasicMaterial] = [
+    trackBasic(
+      new MeshBasicMaterial({
+        color: safeHex(teamColors[0]),
+        transparent: true,
+        opacity: 0.92,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    ),
+    trackBasic(
+      new MeshBasicMaterial({
+        color: safeHex(teamColors[1]),
+        transparent: true,
+        opacity: 0.92,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    ),
+  ];
+
+  /** Materials created per blowgun so each player can glow with their own charge. */
+  const weaponMaterials: MeshBasicMaterial[] = [];
+
   const visualById = new Map<EntityId, NinjaVisual>();
   const visuals: NinjaVisual[] = [];
-  const previousById = new Map<EntityId, PlayerView>();
-  const seenIds = new Set<EntityId>();
   const scratchPose: NinjaPose = createNinjaPose();
+  let frame = 0;
 
   function addOutline(parent: Group, source: Mesh, scale: number): void {
     if (lowDetail) return;
@@ -158,6 +312,81 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     outline.position.copy(source.position);
     outline.scale.copy(source.scale).multiplyScalar(scale);
     parent.add(outline);
+  }
+
+  function detachWeapon(visual: NinjaVisual): void {
+    if (visual.weapon === null) return;
+    visual.arms[1].remove(visual.weapon.group);
+    visual.weapon = null;
+  }
+
+  function attachWeapon(visual: NinjaVisual, kind: WeaponVisualKind, team: TeamId): void {
+    detachWeapon(visual);
+    if (kind === 'none') return;
+
+    const group = new Group();
+    group.userData.weaponKind = kind;
+    group.position.set(0, -0.4, -0.04);
+
+    let spinner: BasicMesh | null = null;
+    let glow: MeshBasicMaterial | null = null;
+
+    if (kind === 'shuriken') {
+      group.position.set(0, -0.38, -0.1);
+      const star = new Mesh(shurikenGeometry, teamStarMaterials[team]);
+      star.userData.weaponRole = 'shuriken';
+      group.add(star);
+      spinner = star;
+    } else if (kind === 'brush') {
+      const handle = new Mesh(brushHandleGeometry, timberMaterial);
+      handle.rotation.x = -Math.PI * 0.5;
+      handle.position.z = -0.525;
+      group.add(handle);
+
+      const head = new Mesh(brushHeadGeometry, teamMaterials[team]);
+      head.rotation.x = -Math.PI * 0.5;
+      head.position.z = -1.08;
+      head.userData.weaponRole = 'brushHead';
+      group.add(head);
+    } else {
+      const material = new MeshBasicMaterial({
+        color: safeHex(teamColors[team]),
+        toneMapped: false,
+      });
+      weaponMaterials.push(material);
+      const tube = new Mesh(blowgunGeometry, material);
+      tube.rotation.x = -Math.PI * 0.5;
+      tube.position.z = -0.6;
+      tube.userData.weaponRole = 'blowgun';
+      group.add(tube);
+      glow = material;
+    }
+
+    visual.arms[1].add(group);
+    visual.weapon = { kind, group, spinner, glow };
+  }
+
+  function createSpecialRing(team: TeamId): { ring: Group; petals: BasicMesh[] } {
+    const ring = new Group();
+    ring.position.y = 0.05;
+    ring.visible = false;
+    const petals: BasicMesh[] = [];
+
+    for (let i = 0; i < SPECIAL_PETALS; i += 1) {
+      const angle = (i / SPECIAL_PETALS) * TAU;
+      const petal = new Mesh(petalGeometry, teamPetalMaterials[team]);
+      petal.position.set(
+        Math.cos(angle) * SPECIAL_RING_RADIUS,
+        0.12 + (i % 2) * 0.16,
+        Math.sin(angle) * SPECIAL_RING_RADIUS,
+      );
+      petal.rotation.y = -angle;
+      petal.rotation.z = (i % 2 === 0 ? 1 : -1) * 0.32;
+      ring.add(petal);
+      petals.push(petal);
+    }
+
+    return { ring, petals };
   }
 
   function createVisual(id: EntityId, team: TeamId): NinjaVisual {
@@ -305,6 +534,9 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       teamMeshes.push(ripple);
     }
 
+    const special = createSpecialRing(team);
+    group.add(special.ring);
+
     return {
       id,
       group,
@@ -316,8 +548,15 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       ripples,
       teamMeshes,
       garbMaterial,
+      ring: special.ring,
+      ringPetals: special.petals,
+      weapon: null,
+      weaponId: '',
+      teamHex: safeHex(teamColors[team]),
       team,
       flash: 0,
+      swing: 0,
+      lastSeen: -1,
     };
   }
 
@@ -330,18 +569,12 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     const dt = Number.isFinite(dtSec) && dtSec > 0 ? dtSec : 0;
     elapsed = Number.isFinite(elapsed + dt) ? elapsed + dt : 0;
     const blend = Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 0;
+    frame += 1;
+    if (!Number.isFinite(frame)) frame = 1;
 
-    previousById.clear();
-    for (let i = 0; i < prev.players.length; i += 1) {
-      const player = prev.players[i];
-      if (player !== undefined) previousById.set(player.id, player);
-    }
-
-    seenIds.clear();
     for (let i = 0; i < curr.players.length; i += 1) {
       const player = curr.players[i];
       if (player === undefined) continue;
-      seenIds.add(player.id);
       let visual = visualById.get(player.id);
       if (visual === undefined) {
         visual = createVisual(player.id, player.team);
@@ -349,17 +582,29 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
         visuals.push(visual);
         scene.add(visual.group);
       }
+      visual.lastSeen = frame;
 
       if (visual.team !== player.team) {
         visual.team = player.team;
+        visual.teamHex = safeHex(teamColors[player.team]);
         const teamMaterial = teamMaterials[player.team];
         for (let m = 0; m < visual.teamMeshes.length; m += 1) {
           const mesh = visual.teamMeshes[m];
           if (mesh !== undefined) mesh.material = teamMaterial;
         }
+        for (let m = 0; m < visual.ringPetals.length; m += 1) {
+          const petal = visual.ringPetals[m];
+          if (petal !== undefined) petal.material = teamPetalMaterials[player.team];
+        }
+        if (visual.weapon !== null) attachWeapon(visual, visual.weapon.kind, player.team);
       }
 
-      const previous = previousById.get(player.id);
+      if (visual.weaponId !== player.weaponId) {
+        visual.weaponId = player.weaponId;
+        attachWeapon(visual, weaponVisualKind(player.weaponId), player.team);
+      }
+
+      const previous = findPrevious(prev.players, player.id);
       let px = safe(player.pos.x);
       let py = safe(player.pos.y);
       let pz = safe(player.pos.z);
@@ -415,11 +660,36 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
         setRippleScale(visual.ripples[0], elapsed);
         setRippleScale(visual.ripples[1], elapsed + 0.5);
       }
+
+      visual.ring.visible = player.specialActive === true && !hidden;
+      if (visual.ring.visible) {
+        visual.ring.rotation.y = elapsed * 1.8;
+        visual.ring.rotation.z = Math.sin(elapsed * 1.3) * 0.12;
+      }
+
+      const weapon = visual.weapon;
+      if (weapon !== null) {
+        if (weapon.glow !== null) {
+          weapon.glow.color.setHex(visual.teamHex);
+          weapon.glow.color.multiplyScalar(chargeGlow(player.charge));
+        }
+        if (weapon.spinner !== null) weapon.spinner.rotation.z = elapsed * 7;
+
+        if (visual.swing > 0) visual.swing = Math.max(0, visual.swing - dt);
+        if (visual.swing > 0 && weapon.kind === 'brush') {
+          const progress = clamp01(1 - visual.swing / SWING_SECONDS);
+          weapon.group.rotation.x = -Math.sin(progress * Math.PI) * 1.15;
+        } else {
+          weapon.group.rotation.x = 0;
+        }
+      } else if (visual.swing > 0) {
+        visual.swing = Math.max(0, visual.swing - dt);
+      }
     }
 
     for (let i = 0; i < visuals.length; i += 1) {
       const visual = visuals[i];
-      if (visual !== undefined && !seenIds.has(visual.id)) visual.group.visible = false;
+      if (visual !== undefined && visual.lastSeen !== frame) visual.group.visible = false;
     }
 
     for (let i = 0; i < visuals.length; i += 1) {
@@ -431,9 +701,16 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
   }
 
   function handle(event: GameEvent): void {
-    if (disposed || event.t !== 'hit') return;
-    const visual = visualById.get(event.target);
-    if (visual !== undefined) visual.flash = FLASH_SECONDS;
+    if (disposed) return;
+    if (event.t === 'hit') {
+      const visual = visualById.get(event.target);
+      if (visual !== undefined) visual.flash = FLASH_SECONDS;
+      return;
+    }
+    if (event.t === 'swing') {
+      const visual = visualById.get(event.id);
+      if (visual !== undefined) visual.swing = SWING_SECONDS;
+    }
   }
 
   function dispose(): void {
@@ -446,8 +723,6 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     }
     visualById.clear();
     visuals.length = 0;
-    previousById.clear();
-    seenIds.clear();
 
     for (const geometry of geometries) geometry.dispose();
     geometries.length = 0;
@@ -455,6 +730,8 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     materials.length = 0;
     for (const material of basicMaterials) material.dispose();
     basicMaterials.length = 0;
+    for (const material of weaponMaterials) material.dispose();
+    weaponMaterials.length = 0;
   }
 
   return { update, handle, dispose };

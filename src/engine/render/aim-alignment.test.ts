@@ -2,21 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { emptyActions } from '../../core/actions';
 import { aimDirection } from '../../core/math/aim';
 import { normalize, sub } from '../../core/math/vec3';
+import aiJson from '../../data/ai.json';
+import matchJson from '../../data/match.json';
 import playerJson from '../../data/player.json';
+import specialJson from '../../data/specials.json';
 import stageJson from '../../data/stages/neon-town.json';
+import subJson from '../../data/subs.json';
 import weaponsJson from '../../data/weapons.json';
-import { parsePlayerConfig, parseStage, parseWeapons } from '../../game/data/load';
-import { createSimulation, LOCAL_PLAYER_ID } from '../../game/sim/simulation';
+import {
+  parseAi,
+  parseMatchConfig,
+  parsePlayerConfig,
+  parseSpecial,
+  parseStage,
+  parseSub,
+  parseWeapons,
+} from '../../game/data/load';
+import { buildTrainingRoster, createSimulation, LOCAL_PLAYER_ID } from '../../game/sim/simulation';
 import { computeCamera, type CameraOutput } from './camera';
 
 function makeSim() {
-  const weapon = parseWeapons(weaponsJson)[0];
+  const weapons = parseWeapons(weaponsJson);
+  const weapon = weapons[0];
   if (weapon === undefined) throw new Error('no weapon');
   return createSimulation({
     stage: parseStage(stageJson),
-    weapon,
+    weapons,
+    sub: parseSub(subJson),
+    special: parseSpecial(specialJson),
     player: parsePlayerConfig(playerJson),
+    match: parseMatchConfig(matchJson),
+    ai: parseAi(aiJson).normal,
+    roster: buildTrainingRoster(LOCAL_PLAYER_ID, weapon.id),
     seed: 1,
+    mode: 'training',
   });
 }
 

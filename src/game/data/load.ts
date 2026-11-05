@@ -1,15 +1,31 @@
 import type { ZodError } from 'zod';
 import type { Box, Face, Vec3 } from '../../core/types';
 import {
+  aiSchema,
+  matchConfigSchema,
   playerConfigSchema,
+  specialSchema,
   stageSchema,
+  subSchema,
   weaponsSchema,
+  type AiProfiles,
+  type MatchConfig,
   type PlayerConfig,
+  type SpecialWeapon,
   type StageData,
+  type SubWeapon,
   type Weapon,
 } from './schemas';
 
-export type { PlayerConfig, StageData, Weapon } from './schemas';
+export type {
+  AiProfiles,
+  MatchConfig,
+  PlayerConfig,
+  SpecialWeapon,
+  StageData,
+  SubWeapon,
+  Weapon,
+} from './schemas';
 
 const AXES: readonly (keyof Vec3)[] = ['x', 'y', 'z'];
 
@@ -79,18 +95,22 @@ function validateStage(stage: StageData): void {
     }
   }
 
-  const ids = new Set<number>();
+  const byId = new Map<number, StageData['waypoints'][number]>();
   for (const [index, waypoint] of stage.waypoints.entries()) {
-    if (ids.has(waypoint.id)) {
+    if (byId.has(waypoint.id)) {
       throw new Error(`waypoints.${index}.id: duplicate id ${waypoint.id}`);
     }
-    ids.add(waypoint.id);
+    byId.set(waypoint.id, waypoint);
   }
 
   for (const [index, waypoint] of stage.waypoints.entries()) {
     for (const [linkIndex, link] of waypoint.links.entries()) {
-      if (!ids.has(link)) {
+      const target = byId.get(link);
+      if (!target) {
         throw new Error(`waypoints.${index}.links.${linkIndex}: unknown waypoint id ${link}`);
+      }
+      if (!target.links.includes(waypoint.id)) {
+        throw new Error(`waypoints.${index}.links.${linkIndex}: one-way link to ${link}`);
       }
     }
   }
@@ -116,5 +136,33 @@ export function parseWeapons(json: unknown): Weapon[] {
 export function parsePlayerConfig(json: unknown): PlayerConfig {
   const result = playerConfigSchema.safeParse(json);
   if (!result.success) failFromZod('player', result.error);
+  return result.data;
+}
+
+/** Parses and validates the single sub weapon definition. Throws with the failing field path. */
+export function parseSub(json: unknown): SubWeapon {
+  const result = subSchema.safeParse(json);
+  if (!result.success) failFromZod('sub', result.error);
+  return result.data;
+}
+
+/** Parses and validates the single special weapon definition. Throws with the failing field path. */
+export function parseSpecial(json: unknown): SpecialWeapon {
+  const result = specialSchema.safeParse(json);
+  if (!result.success) failFromZod('special', result.error);
+  return result.data;
+}
+
+/** Parses and validates the per-difficulty AI profiles. Throws with the failing field path. */
+export function parseAi(json: unknown): AiProfiles {
+  const result = aiSchema.safeParse(json);
+  if (!result.success) failFromZod('ai', result.error);
+  return result.data;
+}
+
+/** Parses and validates the match clock configuration. Throws with the failing field path. */
+export function parseMatchConfig(json: unknown): MatchConfig {
+  const result = matchConfigSchema.safeParse(json);
+  if (!result.success) failFromZod('match', result.error);
   return result.data;
 }

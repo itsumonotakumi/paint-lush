@@ -10,13 +10,13 @@ import {
   GLSL3,
   HemisphereLight,
   InstancedMesh,
+  LinearFilter,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshToonMaterial,
-  NearestFilter,
   PerspectiveCamera,
-  RedFormat,
+  RGFormat,
   Scene,
   ShaderMaterial,
   SRGBColorSpace,
@@ -25,23 +25,28 @@ import {
   WebGLRenderer,
 } from 'three';
 import type { Material } from 'three';
-import decorJson from '../../data/stages/neon-town.decor.json';
 import type { GameEvent } from '../../core/events';
-import { lerp, lerpAngle } from '../../core/math/vec3';
+import { lerpAngle } from '../../core/math/vec3';
 import type { PlayerView, WorldSnapshot } from '../../core/snapshot';
 import type { EntityId, SurfaceId, Vec3 } from '../../core/types';
+import { FIXED_DT } from '../../core/types';
 import type { ICollision, IPaintGrid, SurfaceGrid } from '../../game/contracts';
 import type { StageData } from '../../game/data/schemas';
 import type { IRenderer } from '../ports';
-import { CAMERA_FOV, computeCamera } from './camera';
+import { createBombs } from './bombs';
+import { CAMERA_FOV, computeCamera, PRE_SWEEP_SECONDS, preCamera, preCameraBlend } from './camera';
 import type { CameraOutput } from './camera';
+import { coverageByteLength, updateCoverage } from './coverage';
 import { createDecor } from './decor';
+import { DirtyUploadQueue, MAX_TEXTURE_UPLOADS_PER_FRAME } from './dirtyQueue';
 import { createEffects } from './effects';
 import { buildStaticFaces, buildSurfaceQuad } from './geometry';
 import { INK_FRAGMENT_SHADER, INK_VERTEX_SHADER, inkUniforms } from './inkShader';
 import type { EffectsModule, RenderModule, RenderModuleDeps } from './module';
 import { createNinjas } from './ninja';
 import { PALETTE } from './palette';
+import { resolveQuality } from './quality';
+import type { RenderQuality } from './quality';
 import { createSky } from './sky';
 import { boxTop, surfaceBase } from './stageColors';
 import { createToonGradient } from './toon';
@@ -56,10 +61,6 @@ const MAX_RENDER_PIXELS = 16_000_000;
 const TELEPORT_DISTANCE_SQUARED = 9;
 /** Upper bound for one visual frame, so a stalled tab does not fast-forward effects. */
 const MAX_FRAME_SECONDS = 0.1;
-/** Pixel ratio ceiling on the phone profile. */
-const LOW_DETAIL_PIXEL_RATIO = 1.5;
-/** Pixel ratio ceiling on desktop. */
-const FULL_DETAIL_PIXEL_RATIO = 2;
 /** The camera far plane clears the sky dome with room to spare. */
 const CAMERA_FAR = 400;
 /** Warm key light direction, shared by the lights and the painted wall shader. */
@@ -68,6 +69,10 @@ const SUN_POSITION = { x: 6, y: 14, z: 8 } as const;
 interface SurfaceVisual {
   mesh: Mesh<BufferGeometry, ShaderMaterial>;
   texture: DataTexture;
+  /** RG coverage bytes uploaded to `texture`, rebuilt from the paint grid. */
+  coverage: Uint8Array;
+  /** Simulation-side source of truth; only ever read here. */
+  surface: SurfaceGrid;
 }
 
 function safe(n: number): number {
@@ -106,14 +111,16 @@ export interface RenderSize {
 
 /**
  * The frame is first scaled down so neither side exceeds 4096 px, then the
- * pixel ratio is reduced until the drawing buffer (`size * pixelRatio`) also
- * stays within 4096 px per axis and 16 megapixels in total. Scaling both axes
- * by the same factor preserves the aspect ratio and camera framing.
+ * pixel ratio is reduced until the drawing buffer (`size * pixelRatio`) stays
+ * within 4096 px per axis and the caller's pixel budget (16 megapixels by
+ * default). Scaling both axes by the same factor preserves the aspect ratio
+ * and camera framing.
  */
 export function computeRenderSize(
   width: number,
   height: number,
   pixelRatio: number,
+  maxPixels = MAX_RENDER_PIXELS,
 ): RenderSize {
   const rawWidth = Math.max(1, Math.floor(safe(width)));
   const rawHeight = Math.max(1, Math.floor(safe(height)));
@@ -129,11 +136,14 @@ export function computeRenderSize(
   const requested = safe(pixelRatio);
   let ratio = Math.min(3, Math.max(0.5, requested === 0 ? 1 : requested));
 
+  const budget =
+    Number.isFinite(maxPixels) && maxPixels > 0 ? maxPixels : MAX_RENDER_PIXELS;
+
   const dimensionCap = Math.min(
     MAX_RENDER_DIMENSION / widthPx,
     MAX_RENDER_DIMENSION / heightPx,
   );
-  const pixelCap = Math.sqrt(MAX_RENDER_PIXELS / (widthPx * heightPx));
+  const pixelCap = Math.sqrt(budget / (widthPx * heightPx));
   ratio = Math.min(ratio, dimensionCap, pixelCap);
   if (!Number.isFinite(ratio) || ratio <= 0) ratio = 0.01;
 
@@ -149,6 +159,18 @@ function movedTooFar(from: Vec3, to: Vec3): boolean {
   return dx * dx + dy * dy + dz * dz > TELEPORT_DISTANCE_SQUARED;
 }
 
+/** Linear lookup over the previous snapshot, avoiding a per-frame map rebuild. */
+function findPreviousPlayer(
+  players: readonly PlayerView[],
+  id: EntityId,
+): PlayerView | undefined {
+  for (let i = 0; i < players.length; i += 1) {
+    const player = players[i];
+    if (player !== undefined && player.id === id) return player;
+  }
+  return undefined;
+}
+
 /** Texture dimensions derived from a paint surface, always at least one texel. */
 export function paintTextureSize(surface: SurfaceGrid): [number, number] {
   return [
@@ -157,19 +179,59 @@ export function paintTextureSize(surface: SurfaceGrid): [number, number] {
   ];
 }
 
+/** RG coverage texture plus the byte array uploaded from it. */
+export interface SurfaceCoverage {
+  texture: DataTexture;
+  coverage: Uint8Array;
+}
+
 /**
- * Builds the paint texture for one surface. The initial data is uploaded
- * immediately so unpainted cells (NO_TEAM) never render as team 0.
+ * Builds the RG coverage texture for one surface. The paint grid is read once
+ * here to seed the mask; afterwards only a dirty surface is rebuilt.
  */
-export function createSurfaceTexture(surface: SurfaceGrid): DataTexture {
+export function createSurfaceCoverage(surface: SurfaceGrid): SurfaceCoverage {
   const [width, height] = paintTextureSize(surface);
-  const texture = new DataTexture(surface.data, width, height, RedFormat, UnsignedByteType);
-  texture.minFilter = NearestFilter;
-  texture.magFilter = NearestFilter;
+  const coverage = new Uint8Array(coverageByteLength(width * height));
+  updateCoverage(surface.data, coverage);
+
+  const texture = new DataTexture(coverage, width, height, RGFormat, UnsignedByteType);
+  texture.minFilter = LinearFilter;
+  texture.magFilter = LinearFilter;
   texture.generateMipmaps = false;
   texture.unpackAlignment = 1;
   texture.needsUpdate = true;
-  return texture;
+  return { texture, coverage };
+}
+
+/**
+ * Re-flags every coverage texture after a WebGL context restore. three rebuilds
+ * its own GL objects, but the RG pixels live in `DataTexture` CPU buffers, so
+ * bumping `version` guarantees they are uploaded to the fresh context.
+ * Returns how many textures were flagged.
+ */
+export function markCoverageForRestore(visuals: Iterable<{ texture: DataTexture }>): number {
+  let count = 0;
+  for (const visual of visuals) {
+    visual.texture.needsUpdate = true;
+    count += 1;
+  }
+  return count;
+}
+
+/** Minimal renderer surface needed to hand the canvas back between matches. */
+export interface ReusableRenderer {
+  renderLists: { dispose(): void };
+  dispose(): void;
+}
+
+/**
+ * Releases per-match GL state so a second match can build a new renderer over
+ * the same canvas. `renderer.dispose` frees listeners, programs and caches;
+ * clearing the render lists again drops any scene entries still referenced.
+ */
+export function releaseRendererForReuse(renderer: ReusableRenderer): void {
+  renderer.dispose();
+  renderer.renderLists.dispose();
 }
 
 /** A small four-pointed star with a little thickness, built without assets. */
@@ -247,11 +309,18 @@ export interface ThreeRendererDeps {
   collision: ICollision;
   teamColors: [number, number];
   localPlayerId: number;
+  /** Parsed decoration file for this stage. Validated by createDecor. */
+  decor: unknown;
+  /** Requested visual quality; 'auto' keeps the touch-device rule. */
+  quality: RenderQuality;
 }
 
 export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
-  const { canvas, stage, paint, collision, teamColors, localPlayerId } = deps;
-  const lowDetail = detectLowDetail();
+  const { canvas, stage, paint, collision, teamColors, localPlayerId, quality } = deps;
+  const profile = resolveQuality(quality, detectLowDetail());
+  const lowDetail = profile.lowDetail;
+  const pixelRatioCap = profile.pixelRatio;
+  const maxPixels = profile.maxPixels;
 
   const renderer = new WebGLRenderer({
     canvas,
@@ -267,7 +336,17 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
   const handleContextLost = (event: Event): void => {
     event.preventDefault();
   };
+  /**
+   * three rebuilds its GL objects on restore; the CPU-backed coverage textures
+   * must be flagged for upload and the frame clock reset so the first restored
+   * frame does not inherit a long stale delta.
+   */
+  const handleContextRestored = (): void => {
+    lastFrameMs = -1;
+    markCoverageForRestore(surfaceVisuals.values());
+  };
   canvas.addEventListener('webglcontextlost', handleContextLost, false);
+  canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
 
   const scene = new Scene();
 
@@ -316,13 +395,14 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
 
   const addSurface = (surface: SurfaceGrid): void => {
     const [texWidth, texHeight] = paintTextureSize(surface);
-    const texture = trackTexture(createSurfaceTexture(surface));
+    const { texture, coverage } = createSurfaceCoverage(surface);
+    trackTexture(texture);
 
     const stageBox = stage.boxes[surface.boxIndex];
     const top = stageBox
       ? boxTop(stageBox.box)
       : { x: 0, z: 0, y: 0, width: 0, depth: 0 };
-    const base = toLinearVector(surfaceBase(surface.boxIndex, surface.face, top));
+    const base = toLinearVector(surfaceBase(surface.boxIndex, surface.face, top, stage.id));
 
     const material = trackMaterial(
       new ShaderMaterial({
@@ -355,7 +435,7 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
 
     const mesh = new Mesh(geometry, material);
     scene.add(mesh);
-    surfaceVisuals.set(surface.id, { mesh, texture });
+    surfaceVisuals.set(surface.id, { mesh, texture, coverage, surface });
   };
 
   for (const surface of paint.surfaces) addSurface(surface);
@@ -388,8 +468,9 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
   const effects: EffectsModule = createEffects(moduleDeps);
   const modules: RenderModule[] = [
     createSky(moduleDeps),
-    createDecor({ ...moduleDeps, stage, decor: decorJson }),
+    createDecor({ ...moduleDeps, stage, decor: deps.decor }),
     createNinjas(moduleDeps),
+    createBombs(moduleDeps),
     effects,
   ];
 
@@ -409,9 +490,10 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
 
   /* ---------- per-frame scratch state ---------- */
 
-  const previousById = new Map<EntityId, PlayerView>();
   const scratchMatrix = new Matrix4();
   const shakeOffset = { x: 0, y: 0, z: 0 };
+  const dirtyQueue = new DirtyUploadQueue();
+  const dirtyBatch: SurfaceId[] = [];
   const cameraView: PlayerView = {
     id: 0,
     team: 0,
@@ -421,8 +503,18 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     pitch: 0,
     hp: 0,
     ink: 0,
+    weaponId: '',
+    gauge: 0,
+    specialActive: false,
+    charge: 0,
+    kills: 0,
   };
   const cameraOut: CameraOutput = {
+    position: { x: 0, y: 0, z: 0 },
+    lookTarget: { x: 0, y: 0, z: 0 },
+    fov: CAMERA_FOV,
+  };
+  const preCameraOut: CameraOutput = {
     position: { x: 0, y: 0, z: 0 },
     lookTarget: { x: 0, y: 0, z: 0 },
     fov: CAMERA_FOV,
@@ -467,8 +559,12 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
   }
 
   function resize(w: number, h: number, pixelRatio: number): void {
-    const cap = lowDetail ? LOW_DETAIL_PIXEL_RATIO : FULL_DETAIL_PIXEL_RATIO;
-    const size = computeRenderSize(w, h, Math.min(safe(pixelRatio), cap));
+    const size = computeRenderSize(
+      w,
+      h,
+      Math.min(safe(pixelRatio), pixelRatioCap),
+      maxPixels,
+    );
     renderer.setPixelRatio(size.pixelRatio);
     renderer.setSize(size.width, size.height, false);
     camera.aspect = size.width / size.height;
@@ -479,9 +575,16 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     const dtSec = frameSeconds();
 
     const dirty = paint.takeDirty();
-    for (const id of dirty) {
+    dirtyQueue.enqueue(dirty);
+    const uploads = dirtyQueue.drain(MAX_TEXTURE_UPLOADS_PER_FRAME, dirtyBatch);
+    for (let i = 0; i < uploads; i += 1) {
+      const id = dirtyBatch[i];
+      if (id === undefined) continue;
       const visual = surfaceVisuals.get(id);
-      if (visual) visual.texture.needsUpdate = true;
+      if (visual) {
+        updateCoverage(visual.surface.data, visual.coverage);
+        visual.texture.needsUpdate = true;
+      }
     }
 
     for (let i = 0; i < modules.length; i += 1) {
@@ -489,12 +592,10 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
       if (module !== undefined) module.update(dtSec, prev, curr, alpha);
     }
 
-    previousById.clear();
-    for (const player of prev.players) previousById.set(player.id, player);
-
     let target: PlayerView | undefined;
-    for (const player of curr.players) {
-      if (player.id === cameraPlayerId) {
+    for (let i = 0; i < curr.players.length; i += 1) {
+      const player = curr.players[i];
+      if (player !== undefined && player.id === cameraPlayerId) {
         target = player;
         break;
       }
@@ -506,7 +607,7 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     let lookZ = overview.targetZ;
 
     if (target) {
-      const previous = previousById.get(target.id);
+      const previous = findPreviousPlayer(prev.players, target.id);
       cameraView.id = target.id;
       cameraView.team = target.team;
       cameraView.state = target.state;
@@ -514,10 +615,9 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
       cameraView.ink = target.ink;
 
       if (previous && !movedTooFar(previous.pos, target.pos)) {
-        const pos = lerp(previous.pos, target.pos, alpha);
-        cameraView.pos.x = pos.x;
-        cameraView.pos.y = pos.y;
-        cameraView.pos.z = pos.z;
+        cameraView.pos.x = safe(previous.pos.x + (target.pos.x - previous.pos.x) * alpha);
+        cameraView.pos.y = safe(previous.pos.y + (target.pos.y - previous.pos.y) * alpha);
+        cameraView.pos.z = safe(previous.pos.z + (target.pos.z - previous.pos.z) * alpha);
         cameraView.yaw = lerpAngle(previous.yaw, target.yaw, alpha);
         cameraView.pitch = lerpAngle(previous.pitch, target.pitch, alpha);
       } else {
@@ -535,6 +635,30 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
       lookZ = cameraOut.lookTarget.z;
     } else {
       camera.position.set(overview.x, overview.y, overview.z);
+    }
+
+    // Plan ch. 3 step 1: while the whistle is still upcoming, sweep the stage
+    // and then ease into the player's camera over the final 0.8 s.
+    if (curr.phase === 'pre' && target) {
+      const blendAlpha = Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 1;
+      const prevTick = safe(prev.tick);
+      const currTick = safe(curr.tick);
+      const interpolatedTick = prevTick + (currTick - prevTick) * blendAlpha;
+      const timeLeftInPre = PRE_SWEEP_SECONDS - interpolatedTick * FIXED_DT;
+      const blend = preCameraBlend(timeLeftInPre);
+
+      if (blend < 1) {
+        preCamera(timeLeftInPre, preCameraOut, centerX, centerY, centerZ);
+        const orbit = 1 - blend;
+        camera.position.set(
+          preCameraOut.position.x * orbit + cameraOut.position.x * blend,
+          preCameraOut.position.y * orbit + cameraOut.position.y * blend,
+          preCameraOut.position.z * orbit + cameraOut.position.z * blend,
+        );
+        lookX = preCameraOut.lookTarget.x * orbit + lookX * blend;
+        lookY = preCameraOut.lookTarget.y * orbit + lookY * blend;
+        lookZ = preCameraOut.lookTarget.z * orbit + lookZ * blend;
+      }
     }
 
     // Shake is added after computeCamera so the base framing stays untouched.
@@ -555,8 +679,10 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     const camX = camera.position.x;
     const camZ = camera.position.z;
     let count = 0;
-    for (const projectile of curr.projectiles) {
+    for (let i = 0; i < curr.projectiles.length; i += 1) {
       if (count >= PROJECTILE_CAPACITY) break;
+      const projectile = curr.projectiles[i];
+      if (projectile === undefined) continue;
 
       const px = safe(projectile.pos.x);
       const py = safe(projectile.pos.y);
@@ -600,10 +726,12 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     gradient.dispose();
 
     canvas.removeEventListener('webglcontextlost', handleContextLost, false);
+    canvas.removeEventListener('webglcontextrestored', handleContextRestored, false);
 
     surfaceVisuals.clear();
+    dirtyQueue.clear();
     scene.clear();
-    renderer.dispose();
+    releaseRendererForReuse(renderer);
   }
 
   resize(canvas.clientWidth, canvas.clientHeight, 1);

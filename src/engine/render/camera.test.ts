@@ -9,7 +9,15 @@ import {
   COLLISION_MARGIN,
   HEAD_HEIGHT,
   LOOK_AHEAD_DISTANCE,
+  PRE_ORBIT_ARC,
+  PRE_ORBIT_HEIGHT,
+  PRE_ORBIT_RADIUS,
+  PRE_ORBIT_SECONDS,
+  PRE_BLEND_SECONDS,
+  PRE_SWEEP_SECONDS,
   computeCamera,
+  preCamera,
+  preCameraBlend,
 } from './camera';
 import type { CameraOutput } from './camera';
 
@@ -29,6 +37,11 @@ function makeView(overrides: ViewOverrides = {}): PlayerView {
     pitch: overrides.pitch ?? 0,
     hp: 100,
     ink: 100,
+    weaponId: 'iro-shuriken',
+    gauge: 0,
+    specialActive: false,
+    charge: 0,
+    kills: 0,
   };
 }
 
@@ -195,5 +208,95 @@ describe('computeCamera', () => {
     const out = makeOut();
     const returned = computeCamera(makeView(), noHit, out);
     expect(returned).toBe(out);
+  });
+});
+
+describe('preCamera', () => {
+  it('starts on the +z side, 26 m out and 14 m above the stage centre', () => {
+    const out = preCamera(PRE_SWEEP_SECONDS, makeOut());
+
+    expect(out.position.x).toBeCloseTo(0);
+    expect(out.position.y).toBeCloseTo(PRE_ORBIT_HEIGHT);
+    expect(out.position.z).toBeCloseTo(PRE_ORBIT_RADIUS);
+    expect(out.lookTarget).toEqual({ x: 0, y: 0, z: 0 });
+    expect(out.fov).toBe(CAMERA_FOV);
+  });
+
+  it('orbits a fixed radius and height around the supplied centre', () => {
+    const out = preCamera(PRE_SWEEP_SECONDS, makeOut(), 10, 2, -5);
+
+    expect(out.position.x).toBeCloseTo(10);
+    expect(out.position.y).toBeCloseTo(2 + PRE_ORBIT_HEIGHT);
+    expect(out.position.z).toBeCloseTo(-5 + PRE_ORBIT_RADIUS);
+    expect(out.lookTarget).toEqual({ x: 10, y: 2, z: -5 });
+  });
+
+  it('sweeps the arc while the orbit owns the camera', () => {
+    const halfOrbitLeft = PRE_SWEEP_SECONDS - PRE_ORBIT_SECONDS / 2;
+    const out = preCamera(halfOrbitLeft, makeOut());
+    const expectedX = Math.sin(PRE_ORBIT_ARC / 2) * PRE_ORBIT_RADIUS;
+    const expectedZ = Math.cos(PRE_ORBIT_ARC / 2) * PRE_ORBIT_RADIUS;
+
+    expect(out.position.x).toBeCloseTo(expectedX);
+    expect(out.position.y).toBeCloseTo(PRE_ORBIT_HEIGHT);
+    expect(out.position.z).toBeCloseTo(expectedZ);
+    expect(Math.hypot(out.position.x, out.position.z)).toBeCloseTo(PRE_ORBIT_RADIUS);
+  });
+
+  it('freezes the orbit once the blend window opens', () => {
+    const atOrbitEnd = preCamera(PRE_BLEND_SECONDS, makeOut());
+    const midBlend = preCamera(PRE_BLEND_SECONDS / 2, makeOut());
+    const atEnd = preCamera(0, makeOut());
+
+    expect(midBlend.position).toEqual(atOrbitEnd.position);
+    expect(atEnd.position).toEqual(atOrbitEnd.position);
+    expect(atEnd.lookTarget).toEqual(atOrbitEnd.lookTarget);
+  });
+
+  it('keeps every output finite for hostile time and centre values', () => {
+    for (const timeLeft of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -50,
+      500,
+    ]) {
+      const out = preCamera(timeLeft, makeOut(), Number.NaN, Number.POSITIVE_INFINITY, -Infinity);
+      expect(finite(out.position)).toBe(true);
+      expect(finite(out.lookTarget)).toBe(true);
+      expect(Number.isFinite(out.fov)).toBe(true);
+    }
+  });
+
+  it('mutates and returns the supplied output object', () => {
+    const out = makeOut();
+    expect(preCamera(PRE_SWEEP_SECONDS, out)).toBe(out);
+  });
+});
+
+describe('preCameraBlend', () => {
+  it('stays on the orbit for the first 2.2 s', () => {
+    expect(preCameraBlend(PRE_SWEEP_SECONDS)).toBe(0);
+    expect(preCameraBlend(PRE_SWEEP_SECONDS - PRE_ORBIT_SECONDS + 0.01)).toBe(0);
+  });
+
+  it('smoothsteps to the player camera over the last 0.8 s', () => {
+    expect(preCameraBlend(PRE_BLEND_SECONDS)).toBeCloseTo(0);
+    expect(preCameraBlend(PRE_BLEND_SECONDS / 2)).toBeCloseTo(0.5);
+    expect(preCameraBlend(0)).toBe(1);
+  });
+
+  it('never decreases as the clock runs down', () => {
+    let previous = preCameraBlend(PRE_SWEEP_SECONDS);
+    for (let step = 1; step <= 30; step += 1) {
+      const value = preCameraBlend(PRE_SWEEP_SECONDS * (1 - step / 30));
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('treats non-finite input as the start of the sweep', () => {
+    expect(preCameraBlend(Number.NaN)).toBe(0);
+    expect(preCameraBlend(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });

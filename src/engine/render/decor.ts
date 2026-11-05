@@ -6,6 +6,7 @@ import {
   Color,
   ConeGeometry,
   CylinderGeometry,
+  Group,
   Mesh,
   MeshBasicMaterial,
   SphereGeometry,
@@ -27,49 +28,64 @@ const finite = z.number().finite();
 const positive = finite.positive();
 const nonNegative = finite.nonnegative();
 
-const decorSchema = z
+const decorCommon = {
+  seed: z.number().int().nonnegative(),
+  lantern: z
+    .object({
+      spacing: positive,
+      lowDetailSpacing: positive,
+      height: finite,
+      offset: positive,
+      radius: positive,
+      capRadius: positive,
+    })
+    .strict(),
+  banner: z
+    .object({
+      offsets: z.array(finite).min(1),
+      centerY: finite,
+      offset: nonNegative,
+      width: positive,
+      height: positive,
+    })
+    .strict(),
+  tree: z
+    .object({
+      count: z.number().int().nonnegative(),
+      outsideMin: positive,
+      outsideMax: positive,
+      trunkRadius: positive,
+      trunkHeight: positive,
+      leafRadius: positive,
+    })
+    .strict(),
+  mountain: z
+    .object({
+      count: z.number().int().nonnegative(),
+      z: finite,
+      radius: positive,
+      height: positive,
+      spreadMin: finite,
+      spreadMax: finite,
+    })
+    .strict(),
+  cloud: z
+    .object({
+      count: z.number().int().nonnegative(),
+      minY: finite,
+      maxY: finite,
+      speed: nonNegative,
+      loopHalfWidth: positive,
+      minRadius: positive,
+      maxRadius: positive,
+    })
+    .strict(),
+} as const;
+
+const castleDecorSchema = z
   .object({
     theme: z.literal('sunset-castle'),
-    seed: z.number().int().nonnegative(),
-    lantern: z
-      .object({
-        spacing: positive,
-        lowDetailSpacing: positive,
-        height: finite,
-        offset: positive,
-        radius: positive,
-        capRadius: positive,
-      })
-      .strict(),
-    banner: z
-      .object({
-        offsets: z.array(finite).min(1),
-        centerY: finite,
-        offset: nonNegative,
-        width: positive,
-        height: positive,
-      })
-      .strict(),
-    tree: z
-      .object({
-        count: z.number().int().nonnegative(),
-        outsideMin: positive,
-        outsideMax: positive,
-        trunkRadius: positive,
-        trunkHeight: positive,
-        leafRadius: positive,
-      })
-      .strict(),
-    mountain: z
-      .object({
-        count: z.number().int().nonnegative(),
-        z: finite,
-        radius: positive,
-        height: positive,
-        spreadMin: finite,
-        spreadMax: finite,
-      })
-      .strict(),
+    ...decorCommon,
     castle: z
       .object({
         x: finite,
@@ -80,21 +96,40 @@ const decorSchema = z
         floors: z.number().int().min(1),
       })
       .strict(),
-    cloud: z
+  })
+  .strict();
+
+const harborDecorSchema = z
+  .object({
+    theme: z.literal('harbor'),
+    ...decorCommon,
+    crane: z
+      .object({
+        count: z.number().int().min(1),
+        xSpread: positive,
+        z: finite,
+        height: positive,
+        jibLength: positive,
+        swayRadians: nonNegative,
+        swaySpeed: nonNegative,
+      })
+      .strict(),
+    sea: z
       .object({
         count: z.number().int().nonnegative(),
-        minY: finite,
-        maxY: finite,
-        speed: nonNegative,
-        loopHalfWidth: positive,
-        minRadius: positive,
-        maxRadius: positive,
+        y: finite,
+        size: positive,
+        margin: positive,
       })
       .strict(),
   })
   .strict();
 
+const decorSchema = z.discriminatedUnion('theme', [castleDecorSchema, harborDecorSchema]);
+
 export type DecorData = z.infer<typeof decorSchema>;
+type CastleDecorData = Extract<DecorData, { theme: 'sunset-castle' }>;
+type HarborDecorData = Extract<DecorData, { theme: 'harbor' }>;
 
 /** Validates stage decoration data. Throws with the failing field path. */
 export function parseDecor(json: unknown): DecorData {
@@ -132,9 +167,13 @@ export type DecorKind =
   | 'wallRail'
   | 'shopDoor'
   | 'shopWindow'
-  | 'cloud';
+  | 'cloud'
+  | 'craneTower'
+  | 'craneJib'
+  | 'craneHook'
+  | 'seaPlane';
 
-type DecorLayer = 'matte' | 'lantern' | 'glow' | 'cloud';
+type DecorLayer = 'matte' | 'lantern' | 'glow' | 'cloud' | 'craneJib';
 
 export interface DecorAabb {
   min: Vec3;
@@ -168,8 +207,10 @@ export interface DecorItem {
    */
   renderColor?: number;
   shape: Shape;
-  /** World offset for movable pieces (clouds). Static pieces use zero. */
+  /** World offset for movable pieces (clouds, crane jibs). Static pieces use zero. */
   offset: Vec3;
+  /** Optional base yaw for pivot groups (crane jibs). */
+  yaw?: number;
   aabb: DecorAabb;
 }
 
@@ -1232,7 +1273,7 @@ const CASTLE_TIERS = [
 const CASTLE_ROOF_HEIGHT = 1.1;
 
 /** A tiered keep with flared pyre roofs, timber windows and a gold finial. */
-function addCastle(data: DecorData, out: DecorItem[]): void {
+function addCastle(data: CastleDecorData, out: DecorItem[]): void {
   const x = data.castle.x;
   const z = data.castle.z;
   let y = 0;
@@ -1306,6 +1347,195 @@ function addCastle(data: DecorData, out: DecorItem[]): void {
   );
 }
 
+const CRANE_ORANGE = 0xe8743b;
+const CRANE_YELLOW = 0xf2c14e;
+const SEA_BLUE = 0x4fc3d9;
+
+/**
+ * Two tall harbour cranes beyond the north wall. The towers and braces are
+ * static; each jib (with its cable and hook) is a separate pivot group so it
+ * can sway gently without touching the simulation.
+ */
+function addCranes(data: HarborDecorData, out: DecorItem[]): void {
+  const crane = data.crane;
+  const count = crane.count;
+  const height = crane.height;
+  const baseHalf = Math.max(0.6, height * 0.11);
+  const topHalf = Math.max(0.35, baseHalf * 0.42);
+  const legThickness = Math.max(0.16, height * 0.035);
+
+  for (let index = 0; index < count; index += 1) {
+    const t = count <= 1 ? 0 : (index / (count - 1)) * 2 - 1;
+    const x = safe(t * crane.xSpread);
+    const z = safe(crane.z);
+    const direction = x > 0 ? -1 : 1;
+
+    /* Four tapered corner posts. */
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const bottom = { x: safe(x + sx * baseHalf), z: safe(z + sz * baseHalf) };
+        const top = { x: safe(x + sx * topHalf), z: safe(z + sz * topHalf) };
+        out.push(
+          makeArtItem(
+            'craneTower',
+            'matte',
+            PALETTE.harborOrange,
+            CRANE_ORANGE,
+            {
+              type: 'cylinder',
+              center: {
+                x: safe((bottom.x + top.x) * 0.5),
+                y: safe(height * 0.5),
+                z: safe((bottom.z + top.z) * 0.5),
+              },
+              radius: legThickness * 0.5,
+              height,
+              axis: 'y',
+            },
+          ),
+        );
+      }
+    }
+
+    /* Horizontal lattice braces, narrowing towards the top. */
+    const braceLevels = 6;
+    for (let level = 1; level <= braceLevels; level += 1) {
+      const ratio = level / (braceLevels + 1);
+      const y = safe(height * ratio);
+      const half = baseHalf + (topHalf - baseHalf) * ratio;
+      const brace = Math.max(0.1, legThickness * 0.7);
+      out.push(
+        makeArtItem('craneTower', 'matte', PALETTE.harborOrange, CRANE_ORANGE, {
+          type: 'box',
+          center: { x, y, z: safe(z + half) },
+          size: { x: safe(half * 2), y: brace, z: brace },
+        }),
+      );
+      out.push(
+        makeArtItem('craneTower', 'matte', PALETTE.harborOrange, CRANE_ORANGE, {
+          type: 'box',
+          center: { x, y, z: safe(z - half) },
+          size: { x: safe(half * 2), y: brace, z: brace },
+        }),
+      );
+      out.push(
+        makeArtItem('craneTower', 'matte', PALETTE.harborOrange, CRANE_ORANGE, {
+          type: 'box',
+          center: { x: safe(x + half), y, z },
+          size: { x: brace, y: brace, z: safe(half * 2) },
+        }),
+      );
+      out.push(
+        makeArtItem('craneTower', 'matte', PALETTE.harborOrange, CRANE_ORANGE, {
+          type: 'box',
+          center: { x: safe(x - half), y, z },
+          size: { x: brace, y: brace, z: safe(half * 2) },
+        }),
+      );
+    }
+
+    /* Top deck and operator cabin. */
+    out.push(
+      makeArtItem('craneTower', 'matte', PALETTE.harborOrange, CRANE_ORANGE, {
+        type: 'box',
+        center: { x, y: safe(height + 0.16), z },
+        size: { x: safe(topHalf * 2 + 0.6), y: 0.32, z: safe(topHalf * 2 + 0.6) },
+      }),
+    );
+
+    const pivot: Vec3 = { x, y: safe(height + 0.32), z };
+    const yaw = direction > 0 ? 0 : Math.PI;
+    const jibLength = crane.jibLength;
+    const jibCenter = safe(jibLength * 0.45);
+
+    out.push(
+      makeArtItem('craneJib', 'craneJib', PALETTE.harborYellow, CRANE_YELLOW, {
+        type: 'box',
+        center: { x: jibCenter, y: 0, z: 0 },
+        size: { x: safe(jibLength * 0.9), y: 0.22, z: 0.22 },
+      }),
+    );
+    out.push(
+      makeArtItem('craneJib', 'craneJib', PALETTE.harborOrange, CRANE_ORANGE, {
+        type: 'box',
+        center: { x: safe(-jibLength * 0.14), y: 0, z: 0 },
+        size: { x: safe(jibLength * 0.28), y: 0.18, z: 0.18 },
+      }),
+    );
+    out.push(
+      makeArtItem('craneJib', 'craneJib', PALETTE.harborYellow, CRANE_YELLOW, {
+        type: 'box',
+        center: { x: safe(jibLength * 0.82), y: safe(-1.1), z: 0 },
+        size: { x: 0.07, y: 2.2, z: 0.07 },
+      }),
+    );
+    out.push(
+      makeArtItem('craneHook', 'craneJib', PALETTE.harborOrange, CRANE_ORANGE, {
+        type: 'box',
+        center: { x: safe(jibLength * 0.82), y: safe(-2.35), z: 0 },
+        size: { x: 0.16, y: 0.34, z: 0.16 },
+      }),
+    );
+
+    // Tag this crane's jib pieces with their shared pivot and base yaw.
+    for (let i = out.length - 4; i < out.length; i += 1) {
+      const item = out[i];
+      if (item === undefined) continue;
+      item.offset = { x: pivot.x, y: pivot.y, z: pivot.z };
+      item.aabb = offsetAabb(shapeAabb(item.shape), item.offset);
+      item.yaw = yaw;
+    }
+  }
+}
+
+/** Flat sea quads just outside the arena walls, in the harbour water blue. */
+function addSeaPlanes(data: HarborDecorData, bounds: BoxInfo, out: DecorItem[]): void {
+  const sea = data.sea;
+  const count = sea.count;
+  if (count <= 0) return;
+
+  const thickness = 0.05;
+  const size = sea.size;
+  const margin = sea.margin;
+  const west = safe(bounds.min.x - margin);
+  const east = safe(bounds.max.x + margin);
+  const south = safe(bounds.min.z - margin);
+  const north = safe(bounds.max.z + margin);
+  const spanX = Math.max(1, east - west);
+  const spanZ = Math.max(1, north - south);
+
+  for (let i = 0; i < count; i += 1) {
+    const side = i % 4;
+    const row = Math.floor(i / 4);
+    const rows = Math.max(1, Math.ceil(count / 4));
+    const along = (row + 0.5) / rows;
+
+    let x = west;
+    let z = south;
+    if (side === 0) {
+      x = safe(west + spanX * along);
+      z = south;
+    } else if (side === 1) {
+      x = safe(west + spanX * along);
+      z = north;
+    } else if (side === 2) {
+      x = west;
+      z = safe(south + spanZ * along);
+    } else {
+      x = east;
+      z = safe(south + spanZ * along);
+    }
+
+    out.push(
+      makeArtItem('seaPlane', 'matte', PALETTE.sea, SEA_BLUE, {
+        type: 'box',
+        center: { x, y: sea.y, z },
+        size: { x: size, y: thickness, z: size },
+      }),
+    );
+  }
+}
+
 function addClouds(
   data: DecorData,
   out: DecorItem[],
@@ -1374,8 +1604,13 @@ export function buildDecorPlan(
 
   addTrees(data, items, rng);
   addTownRows(bounds, items, townRng);
-  addMountains(data, items);
-  addCastle(data, items);
+  if (data.theme === 'sunset-castle') {
+    addMountains(data, items);
+    addCastle(data, items);
+  } else {
+    addCranes(data, items);
+    addSeaPlanes(data, bounds, items);
+  }
   addClouds(data, items, rng);
 
   return items;
@@ -1533,11 +1768,13 @@ export function createDecor(
   const lanternItems: DecorItem[] = [];
   const glowItems: DecorItem[] = [];
   const cloudItems: DecorItem[] = [];
+  const craneJibItems: DecorItem[] = [];
 
   for (const item of plan) {
     if (item.layer === 'matte') matteItems.push(item);
     else if (item.layer === 'lantern') lanternItems.push(item);
     else if (item.layer === 'glow') glowItems.push(item);
+    else if (item.layer === 'craneJib') craneJibItems.push(item);
     else cloudItems.push(item);
   }
 
@@ -1590,32 +1827,93 @@ export function createDecor(
     deps.scene.add(mesh);
   }
 
+  /* ---------- crane jibs, each merged around its own pivot ---------- */
+
+  const craneGroups: Group[] = [];
+  const craneBaseYaw: number[] = [];
+
+  if (craneJibItems.length > 0) {
+    const grouped = new Map<string, DecorItem[]>();
+    const order: string[] = [];
+    for (const item of craneJibItems) {
+      const key = `${item.offset.x}|${item.offset.y}|${item.offset.z}`;
+      const list = grouped.get(key);
+      if (list === undefined) {
+        grouped.set(key, [item]);
+        order.push(key);
+      } else {
+        list.push(item);
+      }
+    }
+
+    for (const key of order) {
+      const items = grouped.get(key);
+      if (items === undefined) continue;
+      const geometry = mergeItems(items, true);
+      if (geometry === null) continue;
+      geometries.push(geometry);
+      const mesh = new Mesh(geometry, matteMaterial);
+      mesh.userData.decorStatic = false;
+      meshes.push(mesh);
+
+      const group = new Group();
+      const first = items[0];
+      if (first !== undefined) {
+        group.position.set(first.offset.x, first.offset.y, first.offset.z);
+        group.rotation.y = first.yaw ?? 0;
+        craneBaseYaw.push(first.yaw ?? 0);
+      } else {
+        craneBaseYaw.push(0);
+      }
+      group.add(mesh);
+      craneGroups.push(group);
+      deps.scene.add(group);
+    }
+  }
+
   let disposed = false;
+  let elapsed = 0;
 
   function update(dtSec: number): void {
-    if (deps.lowDetail || cloudMeshes.length === 0) return;
     const raw = safe(dtSec);
     const dt = Math.max(raw, 0);
-    if (dt <= 0) return;
-    const step = data.cloud.speed * dt;
-    const loop = data.cloud.loopHalfWidth;
-    for (const mesh of cloudMeshes) {
-      let x = mesh.position.x + step;
-      if (!Number.isFinite(x)) x = 0;
-      if (x > loop) x -= loop * 2;
-      else if (x < -loop) x += loop * 2;
-      mesh.position.x = x;
+
+    if (!deps.lowDetail && dt > 0 && cloudMeshes.length > 0) {
+      const step = data.cloud.speed * dt;
+      const loop = data.cloud.loopHalfWidth;
+      for (const mesh of cloudMeshes) {
+        let x = mesh.position.x + step;
+        if (!Number.isFinite(x)) x = 0;
+        if (x > loop) x -= loop * 2;
+        else if (x < -loop) x += loop * 2;
+        mesh.position.x = x;
+      }
+    }
+
+    if (dt > 0 && craneGroups.length > 0 && data.theme === 'harbor') {
+      elapsed = Number.isFinite(elapsed + dt) ? elapsed + dt : 0;
+      const sway = data.crane.swayRadians;
+      const speed = data.crane.swaySpeed;
+      for (let i = 0; i < craneGroups.length; i += 1) {
+        const group = craneGroups[i];
+        if (group === undefined) continue;
+        const base = craneBaseYaw[i] ?? 0;
+        group.rotation.y = base + Math.sin(elapsed * speed + i * 1.7) * sway;
+      }
     }
   }
 
   function dispose(): void {
     if (disposed) return;
     disposed = true;
+    for (const group of craneGroups) deps.scene.remove(group);
     for (const mesh of meshes) deps.scene.remove(mesh);
     for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
     meshes.length = 0;
     cloudMeshes.length = 0;
+    craneGroups.length = 0;
+    craneBaseYaw.length = 0;
   }
 
   return { update, dispose };
