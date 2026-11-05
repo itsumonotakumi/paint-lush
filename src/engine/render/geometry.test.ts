@@ -10,6 +10,7 @@ import {
   buildStaticFaces,
   buildSurfaceQuad,
 } from './geometry';
+import { PALETTE } from './palette';
 
 function makeSurface(overrides: Partial<SurfaceGrid> = {}): SurfaceGrid {
   return {
@@ -99,6 +100,37 @@ function vertexAt(positions: Float32Array, index: number): Vec3 {
 }
 
 const FACES: readonly Face[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
+
+/** sRGB byte value to the linear working space expected by vertex colours. */
+function srgbToLinear(channel: number): number {
+  const c = channel / 255;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function paletteLinear(hex: number): [number, number, number] {
+  return [
+    srgbToLinear((hex >> 16) & 0xff),
+    srgbToLinear((hex >> 8) & 0xff),
+    srgbToLinear(hex & 0xff),
+  ];
+}
+
+/** Colour of the first vertex of a face in the batch's FACES order. */
+function faceColor(
+  batch: ReturnType<typeof buildStaticFaces>,
+  face: Face,
+): [number, number, number] {
+  const offset = FACES.indexOf(face) * QUAD_VERTEX_COUNT * 3;
+  return [
+    batch.colors[offset] ?? 0,
+    batch.colors[offset + 1] ?? 0,
+    batch.colors[offset + 2] ?? 0,
+  ];
+}
+
+function luminance(color: readonly [number, number, number]): number {
+  return color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722;
+}
 
 /** In-plane U/V axes matching the paint grid, cross(U, V) may face either way. */
 const FACE_AXES: Record<Face, { u: Vec3; v: Vec3 }> = {
@@ -363,6 +395,46 @@ describe('buildStaticFaces', () => {
     }
 
     expect(batch.vertexCount).toBe(faceIndex * QUAD_VERTEX_COUNT);
+  });
+
+  it('uses bright palette colours in linear space for walls, tops and undersides', () => {
+    const stage = makeStage();
+    const batch = buildStaticFaces(stage, paintStub(new Map()));
+
+    const [wallR, wallG, wallB] = paletteLinear(PALETTE.wall);
+    const [groundR, groundG, groundB] = paletteLinear(PALETTE.ground);
+    const [underR, underG, underB] = paletteLinear(PALETTE.groundUnderside);
+
+    for (const face of ['+x', '-x', '+z', '-z'] as const) {
+      const color = faceColor(batch, face);
+      const [r, g, b] = color;
+      const checks: readonly (readonly [number, number])[] = [
+        [r, wallR],
+        [g, wallG],
+        [b, wallB],
+      ];
+      for (const [value, base] of checks) {
+        expect(value).toBeGreaterThanOrEqual(base * 0.94 - 1e-9);
+        expect(value).toBeLessThanOrEqual(Math.min(1, base * 1.06) + 1e-9);
+      }
+      expect(luminance(color)).toBeGreaterThan(0.4);
+    }
+
+    const top = faceColor(batch, '+y');
+    expect(top[0]).toBeCloseTo(groundR);
+    expect(top[1]).toBeCloseTo(groundG);
+    expect(top[2]).toBeCloseTo(groundB);
+
+    const bottom = faceColor(batch, '-y');
+    expect(bottom[0]).toBeCloseTo(underR);
+    expect(bottom[1]).toBeCloseTo(underG);
+    expect(bottom[2]).toBeCloseTo(underB);
+
+    // Facing directions must stay distinguishable so the town reads in 3D.
+    expect(faceColor(batch, '+z')[1]).toBeGreaterThan(faceColor(batch, '-z')[1]);
+    expect(faceColor(batch, '+x')[2]).toBeGreaterThan(faceColor(batch, '-x')[2]);
+    expect(luminance(top)).toBeGreaterThan(0.4);
+    expect(luminance(bottom)).toBeGreaterThan(0.3);
   });
 
   it('returns empty arrays when every face is paintable', () => {

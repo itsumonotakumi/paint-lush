@@ -74,6 +74,7 @@ function boot(): void {
     paint: sim.paint,
     collision: sim.collision,
     teamColors: TEAM_COLORS,
+    localPlayerId: LOCAL_PLAYER_ID,
   });
   const audio = createAudio({ createContext: () => new AudioContext() });
   audio.setVolumes(save.settings.volume);
@@ -148,7 +149,10 @@ function boot(): void {
   });
 
   const dispatch = (events: readonly GameEvent[], listener: WorldSnapshot['players'][number]['pos']): void => {
-    for (const event of events) audio.handle(event, listener);
+    for (const event of events) {
+      audio.handle(event, listener);
+      renderer.handle(event);
+    }
   };
 
   const frame = (time: number): void => {

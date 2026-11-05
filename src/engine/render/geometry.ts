@@ -2,6 +2,7 @@ import { faceNormal } from '../../core/math/aabb';
 import type { Box, Face, Vec3 } from '../../core/types';
 import type { IPaintGrid, SurfaceGrid } from '../../game/contracts';
 import type { StageData } from '../../game/data/schemas';
+import { PALETTE } from './palette';
 
 /** Number of vertices in one emitted quad (two triangles, no index buffer). */
 export const QUAD_VERTEX_COUNT = 6;
@@ -260,46 +261,47 @@ function boxFaceAxes(box: Box, face: Face): FaceAxes {
   }
 }
 
-/** Dark neon-town palette, nudged per face direction and box for variation. */
-function staticColor(face: Face, boxIndex: number): [number, number, number] {
-  const seed = (((boxIndex + 1) * 0x9e3779b1) >>> 0) % 97;
-  const jitter = (seed / 97) * 0.018;
-  let r = 0.085 + jitter;
-  let g = 0.095 + jitter;
-  let b = 0.125 + jitter;
+/** sRGB byte channel to the linear working space used by vertex colours. */
+function srgbChannelToLinear(value: number): number {
+  const c = clamp01(value);
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
 
-  switch (face) {
-    case '+x':
-      r *= 1.22;
-      b *= 1.05;
-      break;
-    case '-x':
-      r *= 0.92;
-      b *= 1.2;
-      break;
-    case '+y':
-      r += 0.035;
-      g += 0.04;
-      b += 0.05;
-      break;
-    case '-y':
-      r *= 0.55;
-      g *= 0.55;
-      b *= 0.6;
-      break;
-    case '+z':
-      r *= 1.12;
-      g *= 1.04;
-      b *= 1.18;
-      break;
-    case '-z':
-      r *= 1.16;
-      g *= 1.08;
-      b *= 1.02;
-      break;
-  }
+/** Converts a palette hex value to a linear-space RGB triple. */
+function paletteToLinear(hex: number): [number, number, number] {
+  const value = Number.isFinite(hex) ? Math.trunc(hex) : 0xffffff;
+  return [
+    srgbChannelToLinear(((value >> 16) & 0xff) / 255),
+    srgbChannelToLinear(((value >> 8) & 0xff) / 255),
+    srgbChannelToLinear((value & 0xff) / 255),
+  ];
+}
 
-  return [clamp01(r), clamp01(g), clamp01(b)];
+const WALL_COLOR = paletteToLinear(PALETTE.wall);
+const GROUND_COLOR = paletteToLinear(PALETTE.ground);
+const UNDERSIDE_COLOR = paletteToLinear(PALETTE.groundUnderside);
+
+/**
+ * Vertical faces vary by a few percent so neighbouring walls read separately
+ * without breaking the bright, cheerful palette. Tops and undersides keep the
+ * palette value exactly.
+ */
+const FACE_TINT: Record<Face, number> = {
+  '+x': 1.03,
+  '-x': 0.96,
+  '+y': 1,
+  '-y': 1,
+  '+z': 1.05,
+  '-z': 0.97,
+};
+
+/** Static face colour in linear space: cream walls, warm ground, soft undersides. */
+function staticColor(face: Face): [number, number, number] {
+  const source =
+    face === '+y' ? GROUND_COLOR : face === '-y' ? UNDERSIDE_COLOR : WALL_COLOR;
+  const tint = FACE_TINT[face];
+
+  return [clamp01(source[0] * tint), clamp01(source[1] * tint), clamp01(source[2] * tint)];
 }
 
 /**
@@ -339,7 +341,7 @@ export function buildStaticFaces(stage: StageData, paint: IPaintGrid): StaticFac
         axes.normal,
         null,
         colors,
-        staticColor(face, boxIndex),
+        staticColor(face),
       );
     }
   }

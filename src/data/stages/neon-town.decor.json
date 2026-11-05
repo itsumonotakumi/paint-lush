@@ -1,0 +1,52 @@
+{
+  "theme": "sunset-castle",
+  "seed": 20261105,
+  "lantern": {
+    "spacing": 2.5,
+    "lowDetailSpacing": 5,
+    "height": 3.2,
+    "offset": 0.3,
+    "radius": 0.18,
+    "capRadius": 0.08
+  },
+  "banner": {
+    "offsets": [-13, -5, 5, 13],
+    "centerY": 3.35,
+    "offset": 0.05,
+    "width": 1.4,
+    "height": 0.7
+  },
+  "tree": {
+    "count": 12,
+    "outsideMin": 23,
+    "outsideMax": 28,
+    "trunkRadius": 0.25,
+    "trunkHeight": 2.5,
+    "leafRadius": 1.6
+  },
+  "mountain": {
+    "count": 5,
+    "z": -90,
+    "radius": 18,
+    "height": 9,
+    "spreadMin": -80,
+    "spreadMax": 80
+  },
+  "castle": {
+    "x": 0,
+    "z": -32,
+    "width": 9,
+    "height": 2.5,
+    "depth": 9,
+    "floors": 3
+  },
+  "cloud": {
+    "count": 8,
+    "minY": 16,
+    "maxY": 22,
+    "speed": 0.3,
+    "loopHalfWidth": 60,
+    "minRadius": 2,
+    "maxRadius": 3
+  }
+}

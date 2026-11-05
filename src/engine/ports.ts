@@ -6,6 +6,8 @@ import type { SaveData } from '../game/data/schemas';
 export interface IRenderer {
   /** Interpolates between prev and curr by alpha in [0, 1]. */
   render(prev: WorldSnapshot, curr: WorldSnapshot, alpha: number, cameraPlayerId: number): void;
+  /** Feeds visual effects. Called once per event. */
+  handle(event: GameEvent): void;
   resize(width: number, height: number, pixelRatio: number): void;
   dispose(): void;
 }
