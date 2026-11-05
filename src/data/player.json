@@ -1,0 +1,22 @@
+{
+  "halfExtents": { "x": 0.3, "y": 0.8, "z": 0.3 },
+  "gravity": 20,
+  "walkSpeed": 6,
+  "diveSpeed": 9.5,
+  "enemyInkSpeed": 2.5,
+  "airControl": 0.5,
+  "acceleration": 40,
+  "jumpSpeed": 6.5,
+  "wallClimbSpeed": 4,
+  "maxHp": 100,
+  "enemyInkDps": 4,
+  "enemyInkMinHp": 10,
+  "diveHealPerSec": 15,
+  "respawnSeconds": 5,
+  "respawnInvulnSeconds": 1.5,
+  "maxInk": 100,
+  "inkRegenDive": 30,
+  "inkRegenIdle": 4,
+  "diveTransitionSeconds": 0.1,
+  "fireLockAfterDiveSeconds": 0.1
+}

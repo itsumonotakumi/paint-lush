@@ -1,0 +1,17 @@
+[
+  {
+    "id": "iro-shuriken",
+    "name": "彩手裏剣",
+    "kind": "projectile",
+    "intervalSeconds": 0.125,
+    "inkCost": 0.9,
+    "damage": 28,
+    "muzzleSpeed": 22,
+    "projectileGravity": 12,
+    "spreadRadians": 0.03,
+    "paintRadius": 0.5,
+    "trailSpacing": 0.5,
+    "trailRadius": 0.3,
+    "lifetimeSeconds": 3
+  }
+]
