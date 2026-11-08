@@ -77,7 +77,7 @@ export interface TeamLabel {
 
 export type ScreenParams =
   | { kind: 'none' }
-  | { kind: 'loading'; setup: MatchSetup | 'training' }
+  | { kind: 'loading'; setup: MatchSetup | 'training' | 'tutorial' }
   | { kind: 'result'; result: MatchResult; localId: number; teams: readonly [TeamLabel, TeamLabel] };
 
 export interface ScreenContext {
@@ -86,7 +86,7 @@ export interface ScreenContext {
   /** Shows a screen. */
   go(id: ScreenId, params?: ScreenParams): void;
   /** Starts a match or training; called by the loading screen when ready. */
-  start(setup: MatchSetup | 'training'): void;
+  start(setup: MatchSetup | 'training' | 'tutorial'): void;
   /** Returns to the previous screen, used by settings. */
   back(): void;
 }

@@ -49,7 +49,7 @@ interface HarnessState {
 interface Harness {
   ctx: ScreenContext;
   go: GoCall[];
-  starts: Array<MatchSetup | 'training'>;
+  starts: Array<MatchSetup | 'training' | 'tutorial'>;
   bgm: Array<string | null>;
   saved: SaveData[];
   state: HarnessState;
@@ -98,7 +98,7 @@ function makeSaveData(): SaveData {
 function harness(initial: SaveData = makeSaveData()): Harness {
   const state: HarnessState = { data: initial, okSounds: 0, unlocks: 0, backs: 0 };
   const go: GoCall[] = [];
-  const starts: Array<MatchSetup | 'training'> = [];
+  const starts: Array<MatchSetup | 'training' | 'tutorial'> = [];
   const bgm: Array<string | null> = [];
   const saved: SaveData[] = [];
 
@@ -321,6 +321,50 @@ describe('menu screen', () => {
     expect(h.go[1]?.params).toEqual({ kind: 'loading', setup: 'training' });
     expect(h.state.okSounds).toBe(4);
     expect(h.bgm).toEqual(['title']);
+    screen.unmount();
+  });
+
+  it('shows the tutorial first and highlights it until it has been done', () => {
+    const h = harness();
+    const screen = createMenuScreen();
+    const root = mount(screen, h.ctx);
+
+    const first = buttons(root)[0];
+    expect(first).toBeDefined();
+    expect(first?.classList.contains('pr-menu__button--tutorial')).toBe(true);
+    expect(first?.classList.contains('is-highlight')).toBe(true);
+    expect(first?.textContent).toContain('あそびかた');
+    expect(first?.textContent).toContain('はじめての ひとは ここから！');
+    expect(first?.querySelector('.pr-menu__badge')?.textContent).toBe('はじめて？');
+    // The tutorial label needs no ruby, so the ruby count stays at two.
+    expect(root.querySelectorAll('ruby')).toHaveLength(2);
+    screen.unmount();
+
+    const done = makeSaveData();
+    done.records.tutorialDone = true;
+    const doneHarness = harness(done);
+    const doneScreen = createMenuScreen();
+    const doneRoot = mount(doneScreen, doneHarness.ctx);
+
+    const doneFirst = buttons(doneRoot)[0];
+    expect(doneFirst?.classList.contains('pr-menu__button--tutorial')).toBe(true);
+    expect(doneFirst?.classList.contains('is-highlight')).toBe(false);
+    expect(doneFirst?.querySelector('.pr-menu__badge')).toBeNull();
+    expect(doneFirst?.textContent).toContain('あそびかた');
+    doneScreen.unmount();
+  });
+
+  it('opens the tutorial from the first button', () => {
+    const h = harness();
+    const screen = createMenuScreen();
+    const root = mount(screen, h.ctx);
+
+    findButton(root, 'あそびかた').click();
+
+    expect(h.go).toEqual([
+      { id: 'loading', params: { kind: 'loading', setup: 'tutorial' } },
+    ]);
+    expect(h.state.okSounds).toBe(1);
     screen.unmount();
   });
 
@@ -682,6 +726,21 @@ describe('loading screen', () => {
     const controls = find(root, '.pr-loading__controls');
     expect(controls.textContent).toContain('あそぶよ');
     expect(controls.textContent).not.toMatch(/[A-Za-z]/);
+    screen.unmount();
+  });
+
+  it('starts the tutorial with its own label', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    const screen = createLoadingScreen();
+    const root = mount(screen, h.ctx, { kind: 'loading', setup: 'tutorial' });
+
+    expect(find(root, '.pr-loading__hint').textContent).toBe('あそびかたを おぼえよう');
+    expect(h.starts).toHaveLength(0);
+
+    vi.advanceTimersByTime(800);
+
+    expect(h.starts).toEqual(['tutorial']);
     screen.unmount();
   });
 });

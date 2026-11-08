@@ -1,5 +1,5 @@
 import { emptyActions } from '../core/actions';
-import type { InputActions } from '../core/actions';
+import type { InputActions, InputDevice } from '../core/actions';
 import type { GameEvent, MatchPhase } from '../core/events';
 import { createRng } from '../core/rng';
 import type { PlayerView, WorldSnapshot } from '../core/snapshot';
@@ -44,6 +44,7 @@ import type {
   Difficulty,
   MatchConfig,
   PlayerConfig,
+  SaveData,
   Weapon,
 } from '../game/data/schemas';
 import {
@@ -54,6 +55,8 @@ import {
 } from '../game/sim/simulation';
 import { createDebugPanel, type DebugPanel, type DebugParam } from '../ui/debugPanel';
 import { createHud, type Hud, type HudTeam } from '../ui/hud';
+import { createTutorialOverlay } from '../ui/tutorial/overlay';
+import { createTutorial } from './tutorial/tutorial';
 
 /** Fixed simulation steps a single frame may run, matching the original boot loop. */
 export const MAX_STEPS_PER_FRAME = 5;
@@ -173,6 +176,25 @@ export function killLogLine(killer: EntityId, victim: EntityId, localId: EntityI
   return null;
 }
 
+/** Records with the tutorial flag kept exactly as it was, for record writers. */
+function keepTutorialDone(
+  next: SaveData['records'],
+  previous: SaveData['records'],
+): SaveData['records'] {
+  if (previous.tutorialDone !== true) return next;
+  return { ...next, tutorialDone: true };
+}
+
+/** The whole save with `records.tutorialDone` set; everything else is kept. */
+export function withTutorialDone(current: SaveData): SaveData {
+  return {
+    version: 2,
+    settings: current.settings,
+    records: { ...current.records, tutorialDone: true },
+    last: current.last,
+  };
+}
+
 /** Adds one use of the weapon while leaving matches and wins to the result screen. */
 export function recordWeaponUse(save: ISaveStore, weaponId: string): void {
   if (!/^[a-z0-9-]{1,32}$/.test(weaponId)) return;
@@ -182,12 +204,15 @@ export function recordWeaponUse(save: ISaveStore, weaponId: string): void {
   save.save({
     version: 2,
     settings: current.settings,
-    records: {
-      matches: current.records.matches,
-      wins: current.records.wins,
-      weaponUses: { ...current.records.weaponUses, [weaponId]: next },
-      bestPaintCells: current.records.bestPaintCells,
-    },
+    records: keepTutorialDone(
+      {
+        matches: current.records.matches,
+        wins: current.records.wins,
+        weaponUses: { ...current.records.weaponUses, [weaponId]: next },
+        bestPaintCells: current.records.bestPaintCells,
+      },
+      current.records,
+    ),
     last: current.last,
   });
 }
@@ -233,7 +258,7 @@ export function recordMatchResult(
   save.save({
     version: 2,
     settings: current.settings,
-    records: { matches, wins, weaponUses, bestPaintCells },
+    records: keepTutorialDone({ matches, wins, weaponUses, bestPaintCells }, current.records),
     last: current.last,
   });
 }
@@ -268,6 +293,15 @@ export function detectFinePointer(): boolean {
     // Fall through to the touch-capability guess.
   }
   return !(typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+}
+
+/**
+ * Device used to word the tutorial hints. A reading outside the known union
+ * falls back to the on-screen controls when they are shown, or the keyboard.
+ */
+export function tutorialDevice(device: string, touchEnabled: boolean): InputDevice {
+  if (device === 'keyboard' || device === 'gamepad' || device === 'touch') return device;
+  return touchEnabled ? 'touch' : 'keyboard';
 }
 
 function matchDuration(value: number, fallback: number): number {
@@ -337,8 +371,8 @@ export interface MatchRunnerDeps {
 }
 
 export interface MatchRunner {
-  /** Starts a match or training session, replacing any session already running. */
-  start(setup: MatchSetup | 'training'): void;
+  /** Starts a match, training or the guided tutorial, replacing any session. */
+  start(setup: MatchSetup | 'training' | 'tutorial'): void;
   /** Tears the current session down without navigating anywhere. */
   dispose(): void;
 }
@@ -356,12 +390,15 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
     cleanup?.();
   };
 
-  const start = (setup: MatchSetup | 'training'): void => {
+  const start = (setup: MatchSetup | 'training' | 'tutorial'): void => {
     disposeCurrent();
 
     const data = deps.save.load();
-    const training = setup === 'training';
-    const stageId = training ? DEFAULT_STAGE_ID : resolveStageId(setup.stageId);
+    const isTutorial = setup === 'tutorial';
+    /** Match options, or null for the guided tutorial and free training. */
+    const matchSetup: MatchSetup | null = typeof setup === 'string' ? null : setup;
+    const training = matchSetup === null;
+    const stageId = training ? DEFAULT_STAGE_ID : resolveStageId(matchSetup.stageId);
     const stageFile = STAGE_FILES.get(stageId) ?? STAGE_FILES.get(DEFAULT_STAGE_ID);
     const decorFile = DECOR_FILES.get(stageId) ?? DECOR_FILES.get(DEFAULT_STAGE_ID);
     if (stageFile === undefined || decorFile === undefined) {
@@ -372,7 +409,7 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
     const weapons = parseWeapons(weaponsJson);
     const selectedWeapon = resolveWeapon(
       weapons,
-      training ? DEFAULT_WEAPON_ID : setup.weaponId,
+      training ? DEFAULT_WEAPON_ID : matchSetup.weaponId,
     );
     const playerConfig = parsePlayerConfig(playerJson);
     const sub = parseSub(subJson);
@@ -383,9 +420,9 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       ? baseMatch
       : {
           ...baseMatch,
-          durationSeconds: matchDuration(setup.durationSeconds, baseMatch.durationSeconds),
+          durationSeconds: matchDuration(matchSetup.durationSeconds, baseMatch.durationSeconds),
         };
-    const difficulty: Difficulty = training ? 'normal' : setup.difficulty;
+    const difficulty: Difficulty = training ? 'normal' : matchSetup.difficulty;
     const ai = aiFor(difficulty, profiles);
 
     const seed =
@@ -418,7 +455,7 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
     const characters = assignCharacters(
       roster.map((entry) => entry.id),
       LOCAL_PLAYER_ID,
-      training ? data.last.characterId : setup.characterId,
+      training ? data.last.characterId : matchSetup.characterId,
       safeSeed,
     );
 
@@ -440,6 +477,23 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
 
     const hud: Hud = createHud(root);
     hud.setTeams(teams);
+
+    // The tutorial runs on the training stage and draws its card over the HUD.
+    const tutorial = isTutorial ? createTutorial() : null;
+    const tutorialOverlay = isTutorial ? createTutorialOverlay() : null;
+    let tutorialRecorded = false;
+
+    const markTutorialDone = (): void => {
+      if (tutorialRecorded) return;
+      tutorialRecorded = true;
+      try {
+        const current = deps.save.load();
+        if (current.records.tutorialDone === true) return;
+        deps.save.save(withTutorialDone(current));
+      } catch {
+        // Records are optional: a broken store must not end the tutorial.
+      }
+    };
 
     let debugPanel: DebugPanel | null = null;
     if (import.meta.env.DEV) {
@@ -544,6 +598,8 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
         releaseLock();
       }
       hud.showPaused(value, reason);
+      // The pause card owns the screen; the tutorial card comes back on resume.
+      if (value) tutorialOverlay?.setVisible(false);
       // Key releases can be lost while pointer lock exits, so never carry held keys across.
       input.reset();
       accumulator = 0;
@@ -650,6 +706,7 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       touch?.dispose();
       touch = null;
       input.dispose();
+      tutorialOverlay?.dispose();
       hud.dispose();
       renderer.dispose();
     };
@@ -678,6 +735,16 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       cleanup(false);
       deps.go('result', resultScreenParams(result, teams));
     };
+
+    if (tutorial !== null && tutorialOverlay !== null) {
+      tutorialOverlay.mount(root);
+      tutorialOverlay.onSkip(() => {
+        tutorial.skipStep();
+      });
+      tutorialOverlay.onQuit(() => {
+        quit();
+      });
+    }
 
     const inputMap = new Map<EntityId, InputActions>();
     const totalCells = sim.paint.totalCells();
@@ -763,6 +830,18 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
           const me = findLocal(curr.players);
           dispatch(events, me?.pos ?? ZERO_POS);
 
+          if (tutorial !== null) {
+            tutorial.update({
+              localId: LOCAL_PLAYER_ID,
+              me,
+              snapshot: curr,
+              events,
+              actions,
+              dtSec: FIXED_DT,
+              device: tutorialDevice(input.lastDevice(), touchEnabled),
+            });
+          }
+
           accumulator = Math.max(0, accumulator - FIXED_DT);
           steps += 1;
 
@@ -781,6 +860,12 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       if (me !== null) {
         hud.update(me, curr, totalCells);
         touch?.setSpecialGauge(me.gauge);
+      }
+
+      if (tutorial !== null && tutorialOverlay !== null) {
+        if (tutorial.view().finished) markTutorialDone();
+        // The pause card hides the tutorial card, so never redraw it while paused.
+        if (!paused) tutorialOverlay.show(tutorial.view());
       }
     };
 

@@ -47,13 +47,14 @@ export function createLoadingScreen(): IScreen {
       started = false;
 
       const setup = params.kind === 'loading' ? params.setup : null;
+      const tutorial = setup === 'tutorial';
 
       const screen = createEl('pr-screens pr-screens--loading');
       const panel = createEl('pr-screen pr-loading');
 
       const hint = document.createElement('p');
       hint.className = 'pr-loading__hint';
-      hint.textContent = 'もうすぐ はじまるよ！';
+      hint.textContent = tutorial ? 'あそびかたを おぼえよう' : 'もうすぐ はじまるよ！';
 
       const controls = document.createElement('p');
       controls.className = 'pr-loading__controls';

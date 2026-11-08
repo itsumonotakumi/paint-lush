@@ -1,16 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FIXED_DT } from '../core/types';
-import type { ISaveStore } from '../engine/ports';
+import type { GameEvent } from '../core/events';
+import type { WorldSnapshot } from '../core/snapshot';
+import type { ICollision, IPaintGrid, MatchResult } from '../game/contracts';
+import type { IRenderer, ISaveStore } from '../engine/ports';
 import { defaultSave } from '../engine/save/saveStore';
-import type { MatchResult } from '../game/contracts';
 import type { SaveData } from '../game/data/schemas';
 import { parseWeapons } from '../game/data/load';
-import { LOCAL_PLAYER_ID } from '../game/sim/simulation';
+import { LOCAL_PLAYER_ID, type Simulation } from '../game/sim/simulation';
 import weaponsJson from '../data/weapons.json';
 import {
   COLORBLIND_TEAMS,
   TEAM_PAIRS,
   bgmTrackForPhase,
+  createMatchRunner,
   frameDeltaSeconds,
   killLogLine,
   pickTeams,
@@ -21,6 +25,8 @@ import {
   resultScreenParams,
   shouldStepMatch,
   touchLookSensitivity,
+  tutorialDevice,
+  withTutorialDone,
 } from './matchRunner';
 
 function memoryStore(initial: SaveData): { store: ISaveStore; current(): SaveData } {
@@ -273,5 +279,257 @@ describe('phase music', () => {
     expect(touchLookSensitivity(Number.NaN)).toBe(0.0001);
     expect(touchLookSensitivity(0)).toBe(0.0001);
     expect(touchLookSensitivity(1_000_000)).toBe(0.05);
+  });
+});
+
+describe('tutorial device hints', () => {
+  it('keeps known devices and falls back to touch whenever the controls are on', () => {
+    expect(tutorialDevice('gamepad', false)).toBe('gamepad');
+    expect(tutorialDevice('touch', false)).toBe('touch');
+    expect(tutorialDevice('keyboard', true)).toBe('keyboard');
+    expect(tutorialDevice('mystery', true)).toBe('touch');
+    expect(tutorialDevice('mystery', false)).toBe('keyboard');
+  });
+});
+
+describe('tutorial records', () => {
+  it('sets tutorialDone without touching settings or the rest of the records', () => {
+    const current = defaultSave();
+    current.settings.volume.bgm = 0.3;
+    current.records.matches = 4;
+    current.records.weaponUses = { oofude: 2 };
+
+    const next = withTutorialDone(current);
+
+    expect(next.records.tutorialDone).toBe(true);
+    expect(next.records.matches).toBe(4);
+    expect(next.records.weaponUses).toEqual({ oofude: 2 });
+    expect(next.settings.volume.bgm).toBe(0.3);
+    expect(next.last).toEqual(current.last);
+    expect(current.records.tutorialDone).toBeUndefined();
+  });
+
+  it('keeps the tutorial flag when later match records are written', () => {
+    const initial = defaultSave();
+    initial.records.tutorialDone = true;
+    const { store, current } = memoryStore(initial);
+
+    recordWeaponUse(store, 'ofude');
+    recordMatchResult(store, 'ofude', 1, {
+      winner: 0,
+      ratio: [50, 50],
+      players: [{ id: 1, team: 0, paintCells: 10, kills: 0, deaths: 0 }],
+    });
+
+    expect(current().records.tutorialDone).toBe(true);
+    // An id the schema rejects still leaves the flag untouched.
+    recordWeaponUse(store, 'Bad Id!');
+    expect(current().records.tutorialDone).toBe(true);
+  });
+});
+
+/* ---------- tutorial session fakes ---------- */
+
+const sessionRoots: HTMLElement[] = [];
+
+function worldSnapshot(): WorldSnapshot {
+  return {
+    tick: 0,
+    players: [],
+    projectiles: [],
+    bombs: [],
+    phase: 'play',
+    timeLeft: 120,
+    counts: [0, 0],
+  };
+}
+
+function fakeRenderer(): IRenderer {
+  return {
+    render: () => undefined,
+    handle: () => undefined,
+    resize: () => undefined,
+    dispose: () => undefined,
+  };
+}
+
+function fakeCollision(): ICollision {
+  return {
+    moveAndSlide: (pos, vel) => ({ pos, vel, grounded: false, ground: null, wall: null }),
+    raycast: () => null,
+    containsPoint: () => false,
+  };
+}
+
+function fakePaint(): IPaintGrid {
+  return {
+    surfaces: [],
+    surfaceAt: () => null,
+    sampleHit: () => 0,
+    splatHit: () => 0,
+    splat: () => 0,
+    counts: () => [0, 0],
+    totalCells: () => 1000,
+    takeDirty: () => [],
+  };
+}
+
+let frameCallback: FrameRequestCallback | null = null;
+
+function runFrame(timeMs: number): void {
+  const callback = frameCallback;
+  if (callback !== null) callback(timeMs);
+}
+
+function press(code: string): void {
+  window.dispatchEvent(new KeyboardEvent('keydown', { code }));
+}
+
+interface TutorialSession {
+  runner: ReturnType<typeof createMatchRunner>;
+  root: HTMLElement;
+  go: string[];
+  bgm: Array<string | null>;
+  saves: () => number;
+  current: () => SaveData;
+}
+
+function startTutorial(): TutorialSession {
+  const canvas = document.createElement('canvas');
+  const root = document.createElement('div');
+  document.body.append(root);
+  sessionRoots.push(root);
+
+  Object.defineProperty(canvas, 'requestPointerLock', {
+    configurable: true,
+    value: () => Promise.resolve(),
+  });
+  Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 0 });
+
+  const state = worldSnapshot();
+  let queued: GameEvent[] = [];
+  const sim: Simulation = {
+    collision: fakeCollision(),
+    paint: fakePaint(),
+    step: () => {
+      const events = queued;
+      queued = [];
+      return events;
+    },
+    snapshot: () => state,
+    result: () => null,
+  };
+
+  let stored = defaultSave();
+  let writes = 0;
+  const store: ISaveStore = {
+    load: () => stored,
+    save: (next) => {
+      stored = next;
+      writes += 1;
+      return true;
+    },
+  };
+  const go: string[] = [];
+  const bgm: Array<string | null> = [];
+
+  const runner = createMatchRunner({
+    canvas,
+    root,
+    save: store,
+    audio: {
+      unlock: () => Promise.resolve(),
+      handle: () => undefined,
+      setBgm: (id) => bgm.push(id),
+      setVolumes: () => undefined,
+    },
+    go: (id) => go.push(id),
+    createSeed: () => 7,
+    createRenderer: fakeRenderer,
+    createSim: () => sim,
+    isFinePointer: () => true,
+  });
+  runner.start('tutorial');
+
+  return {
+    runner,
+    root,
+    go,
+    bgm,
+    saves: () => writes,
+    current: () => stored,
+  };
+}
+
+beforeEach(() => {
+  frameCallback = null;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    frameCallback = callback;
+    return 1;
+  });
+  vi.stubGlobal('cancelAnimationFrame', () => {
+    frameCallback = null;
+  });
+});
+
+afterEach(() => {
+  for (const root of sessionRoots.splice(0)) root.remove();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('tutorial session', () => {
+  it('feeds the controller each tick and saves tutorialDone exactly once', () => {
+    const session = startTutorial();
+    expect(session.root.querySelector<HTMLElement>('.pr-tut')?.hidden).toBe(true);
+
+    runFrame(16.7);
+    const card = session.root.querySelector<HTMLElement>('.pr-tut');
+    expect(card?.hidden).toBe(false);
+    expect(session.root.querySelector('.pr-tut__title')?.textContent).toBe('うごいて みよう');
+    expect(session.root.querySelector('.pr-tut__count')?.textContent).toBe('1 / 8');
+
+    const skip = session.root.querySelector<HTMLButtonElement>('.pr-tut__skip');
+    expect(skip).not.toBeNull();
+    for (let step = 0; step < 8; step += 1) skip?.click();
+
+    runFrame(33.4);
+
+    expect(session.root.querySelector('.pr-tut__title')?.textContent).toBe(
+      'これで きみも 一人前の 忍者！',
+    );
+    expect(session.saves()).toBe(1);
+    expect(session.current().records.tutorialDone).toBe(true);
+
+    runFrame(50.1);
+    expect(session.saves()).toBe(1);
+    session.runner.dispose();
+  });
+
+  it('hides the card while paused and quits to the menu from おわる', () => {
+    const session = startTutorial();
+    runFrame(16.7);
+    expect(session.root.querySelector<HTMLElement>('.pr-tut')?.hidden).toBe(false);
+
+    press('Escape');
+    runFrame(33.4);
+
+    expect(session.root.querySelector<HTMLElement>('.pr-paused')?.hidden).toBe(false);
+    expect(session.root.querySelector<HTMLElement>('.pr-tut')?.hidden).toBe(true);
+
+    const resume = session.root.querySelector<HTMLButtonElement>('.pr-paused__button');
+    expect(resume).not.toBeNull();
+    resume?.click();
+    runFrame(50.1);
+    expect(session.root.querySelector<HTMLElement>('.pr-tut')?.hidden).toBe(false);
+
+    const quit = session.root.querySelector<HTMLButtonElement>('.pr-tut__quit');
+    expect(quit).not.toBeNull();
+    quit?.click();
+
+    expect(session.go).toEqual(['menu']);
+    expect(session.bgm[session.bgm.length - 1]).toBeNull();
+    expect(session.root.querySelector('.pr-tut')).toBeNull();
+    expect(session.saves()).toBe(0);
   });
 });

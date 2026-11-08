@@ -273,6 +273,8 @@ export const saveDataSchema = z
         wins: count,
         weaponUses: z.record(recordKey, count),
         bestPaintCells: count,
+        /** Set once the guided tutorial is finished or skipped to the end. */
+        tutorialDone: z.boolean().optional(),
       })
       .strict(),
     last: z

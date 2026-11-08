@@ -387,6 +387,59 @@
   background: #ff2e88;
 }
 
+.pr-menu__button--tutorial {
+  background: #7bdcff;
+  box-shadow: 0 6px 0 #3d8fae;
+}
+
+.pr-menu__button--tutorial::before {
+  background: #ff8f3d;
+}
+
+.pr-menu__label {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1em 0.6em;
+  align-items: baseline;
+}
+
+.pr-menu__label-name {
+  letter-spacing: 0.08em;
+}
+
+.pr-menu__label-sub {
+  color: rgba(43, 47, 92, 0.72);
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.pr-menu__badge {
+  padding: 2px 10px 3px;
+  border-radius: 999px;
+  background: #ff2e88;
+  color: #fff;
+  font-size: 0.58em;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  box-shadow: 0 2px 0 rgba(43, 47, 92, 0.2);
+  animation: pr-menu-badge-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pr-menu-badge-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 46, 136, 0.55);
+    transform: scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 7px rgba(255, 46, 136, 0);
+    transform: scale(1.1);
+  }
+}
+
 .pr-menu__button--training::before {
   background: #19e6d0;
 }
@@ -1280,7 +1333,8 @@
   .pr-logo__drip,
   .pr-loading__drop,
   .pr-loading__puddle,
-  .pr-confetti__piece {
+  .pr-confetti__piece,
+  .pr-menu__badge {
     animation: none;
   }
 
