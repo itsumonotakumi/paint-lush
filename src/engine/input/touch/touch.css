@@ -139,37 +139,79 @@
 }
 
 .pr-touch__button--fire {
-  right: calc(28px * var(--pr-touch-scale));
-  bottom: calc(126px * var(--pr-touch-scale));
-  width: calc(76px * var(--pr-touch-scale));
-  height: calc(76px * var(--pr-touch-scale));
-  min-width: calc(76px * var(--pr-touch-scale));
-  min-height: calc(76px * var(--pr-touch-scale));
+  right: 6px;
+  bottom: 118px;
+  width: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  height: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  min-width: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  min-height: min(calc(74px * var(--pr-touch-scale)), 18vw);
   background: rgba(255, 228, 94, 0.94);
 }
 
 .pr-touch__button--jump {
-  right: calc(34px * var(--pr-touch-scale));
-  bottom: calc(36px * var(--pr-touch-scale));
+  right: 20px;
+  bottom: 26px;
+  width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  height: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-height: min(calc(64px * var(--pr-touch-scale)), 16vw);
   background: rgba(25, 230, 208, 0.9);
 }
 
 .pr-touch__button--dive {
-  right: calc(122px * var(--pr-touch-scale));
-  bottom: calc(34px * var(--pr-touch-scale));
+  right: 112px;
+  bottom: 26px;
+  width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  height: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-height: min(calc(64px * var(--pr-touch-scale)), 16vw);
   background: rgba(120, 165, 255, 0.92);
 }
 
 .pr-touch__button--sub {
-  right: calc(124px * var(--pr-touch-scale));
-  bottom: calc(126px * var(--pr-touch-scale));
+  right: 112px;
+  bottom: 132px;
+  width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  height: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-width: min(calc(64px * var(--pr-touch-scale)), 16vw);
+  min-height: min(calc(64px * var(--pr-touch-scale)), 16vw);
   background: rgba(255, 158, 205, 0.92);
 }
 
+/* The ring doubles as the special gauge, so the button is as large as fire. */
 .pr-touch__button--special {
-  right: calc(216px * var(--pr-touch-scale));
-  bottom: calc(82px * var(--pr-touch-scale));
-  background: rgba(255, 255, 255, 0.92);
+  --pr-special-fill: 0%;
+  right: 96px;
+  bottom: calc(130px + 74px * var(--pr-touch-scale));
+  width: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  height: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  min-width: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  min-height: min(calc(74px * var(--pr-touch-scale)), 18vw);
+  border-color: rgba(43, 47, 92, 0.75);
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(255, 255, 255, 0.96) 0 56%,
+      rgba(255, 255, 255, 0) 57%
+    ),
+    conic-gradient(#ffc14d var(--pr-special-fill, 0%), rgba(255, 255, 255, 0.55) 0);
+  filter: saturate(0.45);
+}
+
+.pr-touch__button--special.pr-touch__button--ready {
+  filter: none;
+  animation: pr-touch-special-glow 1.15s ease-in-out infinite;
+}
+
+@keyframes pr-touch-special-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.24) saturate(1.1);
+  }
 }
 
 .pr-touch__button--pause {
@@ -192,4 +234,15 @@
       calc(var(--pr-touch-offset-y) * 100vh)
     )
     scale(0.92);
+}
+
+/* The HUD gauge is redundant while the on-screen special ring is visible. */
+body:has(.pr-touch:not(.pr-touch--hidden):not([hidden])) .pr-gauge {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-touch__button--special.pr-touch__button--ready {
+    animation: none;
+  }
 }

@@ -1,5 +1,13 @@
 import type { IScreen, MatchSetup, ScreenContext } from '../../engine/ports';
+import { getCharacter } from '../../engine/render/characters/defs';
+import {
+  CHARACTER_IDS,
+  DEFAULT_CHARACTER_ID,
+  isCharacterId,
+} from '../../engine/render/characters/roster';
+import type { CharacterDef } from '../../engine/render/characters/types';
 import type { Difficulty, SaveData } from '../../game/data/schemas';
+import { createCharacterPreview } from './characterPreview';
 
 interface LabelPart {
   text: string;
@@ -54,6 +62,42 @@ const TIMES: ReadonlyArray<{ seconds: number; label: string }> = [
   { seconds: 180, label: '3 ふん' },
   { seconds: 300, label: '5 ふん' },
 ];
+
+/** Roster order, resolved through the defs module so a missing entry still falls back safely. */
+const CHARACTER_OPTIONS: readonly CharacterDef[] = CHARACTER_IDS.map((id) => getCharacter(id));
+
+const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+const DATA_PNG_PREFIX = 'data:image/png;base64,';
+/** CSS pixels; the icon renderer multiplies by the capped device pixel ratio. */
+const ICON_SIZE = 104;
+
+function safeColor(value: string, fallback: string): string {
+  return COLOR_PATTERN.test(value) ? value : fallback;
+}
+
+/** Only baked PNG data URLs may reach an <img src>; CSP allows nothing else. */
+function isPngDataUrl(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith(DATA_PNG_PREFIX) &&
+    value.length > DATA_PNG_PREFIX.length
+  );
+}
+
+function pickRandomCharacterId(): string {
+  const count = CHARACTER_IDS.length;
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi !== undefined && typeof cryptoApi.getRandomValues === 'function') {
+    const buffer = new Uint32Array(1);
+    cryptoApi.getRandomValues(buffer);
+    const value = buffer[0];
+    if (value !== undefined && Number.isFinite(value)) {
+      return CHARACTER_IDS[value % count] ?? DEFAULT_CHARACTER_ID;
+    }
+  }
+  const index = Math.floor(Math.random() * count);
+  return CHARACTER_IDS[index] ?? DEFAULT_CHARACTER_ID;
+}
 
 function createEl(className: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -117,6 +161,7 @@ export function createSetupScreen(): IScreen {
       let weaponId = WEAPONS.find((weapon) => weapon.id === last.weaponId)?.id ?? DEFAULT_WEAPON;
       let difficulty = DIFFICULTIES.find((item) => item.id === last.difficulty)?.id ?? 'normal';
       let durationSeconds = nearestDuration(last.durationSeconds);
+      let characterId: string = isCharacterId(last.characterId) ? last.characterId : DEFAULT_CHARACTER_ID;
 
       const screen = createEl('pr-screens pr-screens--setup');
       const panel = createEl('pr-screen pr-setup');
@@ -185,6 +230,186 @@ export function createSetupScreen(): IScreen {
         return group;
       };
 
+      /* ---------- character picker ---------- */
+
+      const previewColumn = createEl('div pr-character-preview');
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pr-character-preview__canvas';
+      canvas.width = 320;
+      canvas.height = 320;
+      canvas.setAttribute('aria-hidden', 'true');
+
+      const previewName = document.createElement('p');
+      previewName.className = 'pr-character-preview__name';
+      const previewTagline = document.createElement('p');
+      previewTagline.className = 'pr-character-preview__tagline';
+      const previewBubble = document.createElement('p');
+      previewBubble.className = 'pr-character-preview__bubble';
+
+      const backToggle = document.createElement('button');
+      backToggle.type = 'button';
+      backToggle.className = 'pr-btn pr-btn--ghost pr-character-preview__back';
+      backToggle.textContent = 'うしろ';
+      backToggle.setAttribute('aria-pressed', 'false');
+
+      previewColumn.append(canvas, previewName, previewTagline, previewBubble, backToggle);
+
+      const preview = createCharacterPreview(canvas);
+      cleanups.push(() => preview.dispose());
+
+      let backFacing = false;
+      const onBackToggle = (): void => {
+        if (!mounted) return;
+        ctx.audio.handle({ t: 'ui', kind: 'ok' }, { x: 0, y: 0, z: 0 }, 0);
+        backFacing = !backFacing;
+        backToggle.setAttribute('aria-pressed', backFacing ? 'true' : 'false');
+        backToggle.classList.toggle('is-on', backFacing);
+        preview.setBack(backFacing);
+      };
+      backToggle.addEventListener('click', onBackToggle);
+      cleanups.push(() => backToggle.removeEventListener('click', onBackToggle));
+
+      const grid = createEl('div pr-character-grid');
+      const cards = new Map<string, HTMLButtonElement>();
+
+      const showCharacter = (id: string): void => {
+        const def = getCharacter(id);
+        previewName.textContent = def.name;
+        previewTagline.textContent = def.tagline;
+        previewBubble.textContent = def.catchphrase;
+        preview.show(def.id);
+      };
+
+      const selectCharacter = (id: string): void => {
+        if (!isCharacterId(id)) return;
+        characterId = id;
+        for (const [key, card] of cards) {
+          const active = key === id;
+          card.classList.toggle('is-selected', active);
+          card.setAttribute('aria-checked', active ? 'true' : 'false');
+          card.tabIndex = active ? 0 : -1;
+        }
+        showCharacter(id);
+      };
+
+      for (const def of CHARACTER_OPTIONS) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'pr-choice pr-character-card';
+        card.dataset.value = def.id;
+        card.setAttribute('role', 'radio');
+        card.setAttribute('aria-label', def.name);
+        card.setAttribute('aria-checked', def.id === characterId ? 'true' : 'false');
+        card.classList.toggle('is-selected', def.id === characterId);
+        card.tabIndex = def.id === characterId ? 0 : -1;
+
+        const band = createEl('span pr-character-card__band');
+        band.setAttribute('aria-hidden', 'true');
+        band.style.setProperty('--pr-char-garb', safeColor(def.colors.garb, '#2b2f5c'));
+        band.style.setProperty('--pr-char-accent', safeColor(def.colors.accent, '#1b1a33'));
+
+        const name = document.createElement('span');
+        name.className = 'pr-character-card__name';
+        name.textContent = def.name;
+
+        card.append(band, name);
+        const onClick = (): void => {
+          if (!mounted) return;
+          ctx.audio.handle({ t: 'ui', kind: 'ok' }, { x: 0, y: 0, z: 0 }, 0);
+          selectCharacter(def.id);
+        };
+        card.addEventListener('click', onClick);
+        cleanups.push(() => card.removeEventListener('click', onClick));
+        cards.set(def.id, card);
+        grid.append(card);
+      }
+
+      const onGridKeyDown = (event: KeyboardEvent): void => {
+        if (!mounted) return;
+        const currentIndex = CHARACTER_IDS.findIndex((id) => id === characterId);
+        let nextIndex = currentIndex < 0 ? 0 : currentIndex;
+        switch (event.key) {
+          case 'ArrowRight':
+          case 'ArrowDown':
+            nextIndex = (nextIndex + 1) % CHARACTER_IDS.length;
+            break;
+          case 'ArrowLeft':
+          case 'ArrowUp':
+            nextIndex = (nextIndex - 1 + CHARACTER_IDS.length) % CHARACTER_IDS.length;
+            break;
+          case 'Home':
+            nextIndex = 0;
+            break;
+          case 'End':
+            nextIndex = CHARACTER_IDS.length - 1;
+            break;
+          default:
+            return;
+        }
+        event.preventDefault();
+        const nextId = CHARACTER_IDS[nextIndex];
+        if (nextId === undefined) return;
+        ctx.audio.handle({ t: 'ui', kind: 'ok' }, { x: 0, y: 0, z: 0 }, 0);
+        selectCharacter(nextId);
+        cards.get(nextId)?.focus();
+      };
+      grid.addEventListener('keydown', onGridKeyDown);
+      cleanups.push(() => grid.removeEventListener('keydown', onGridKeyDown));
+
+      /* Thumbnails are progressively enhanced: only a valid PNG data URL is
+       * ever written to an <img>, and a missing icon leaves the name alone. */
+      const applyIcons = (icons: ReadonlyMap<string, string>): void => {
+        if (!mounted) return;
+        for (const [id, url] of icons) {
+          if (!isPngDataUrl(url)) continue;
+          const card = cards.get(id);
+          if (card === undefined) continue;
+          if (card.querySelector('.pr-character-card__icon') !== null) continue;
+          const icon = document.createElement('img');
+          icon.className = 'pr-character-card__icon';
+          icon.alt = card.getAttribute('aria-label') ?? '';
+          icon.draggable = false;
+          icon.decoding = 'async';
+          icon.src = url;
+          card.prepend(icon);
+        }
+      };
+
+      const characterGroup = createEl('div pr-group pr-group--character');
+      characterGroup.setAttribute('role', 'radiogroup');
+      characterGroup.setAttribute('aria-label', 'キャラ');
+
+      const characterLegend = document.createElement('p');
+      characterLegend.className = 'pr-group__legend';
+      characterLegend.textContent = 'キャラ';
+
+      const characterLayout = createEl('div pr-character-layout');
+      characterLayout.append(previewColumn, grid);
+
+      const characterFooter = createEl('div pr-character__footer');
+      const characterNote = document.createElement('p');
+      characterNote.className = 'pr-character__note';
+      characterNote.textContent = 'みための ちがい だけ だよ';
+
+      const randomButton = document.createElement('button');
+      randomButton.type = 'button';
+      randomButton.className = 'pr-btn pr-btn--ghost pr-character__random';
+      randomButton.textContent = 'おまかせ';
+      const onRandom = (): void => {
+        if (!mounted) return;
+        ctx.audio.handle({ t: 'ui', kind: 'ok' }, { x: 0, y: 0, z: 0 }, 0);
+        const id = pickRandomCharacterId();
+        selectCharacter(id);
+        cards.get(id)?.focus();
+      };
+      randomButton.addEventListener('click', onRandom);
+      cleanups.push(() => randomButton.removeEventListener('click', onRandom));
+
+      characterFooter.append(characterNote, randomButton);
+      characterGroup.append(characterLegend, characterLayout, characterFooter);
+      selectCharacter(characterId);
+      groups.append(characterGroup);
+
       const stageOptions: ChoiceOption[] = STAGES.map((stage) => ({
         id: stage.id,
         aria: stage.aria,
@@ -252,6 +477,7 @@ export function createSetupScreen(): IScreen {
           stageId,
           difficulty,
           durationSeconds,
+          characterId,
         };
         const current = ctx.save.load();
         ctx.save.save({
@@ -263,6 +489,7 @@ export function createSetupScreen(): IScreen {
             stageId: setup.stageId,
             difficulty: setup.difficulty,
             durationSeconds: setup.durationSeconds,
+            characterId,
           },
         });
         ctx.go('loading', { kind: 'loading', setup });
@@ -275,7 +502,29 @@ export function createSetupScreen(): IScreen {
       root.append(screen);
       host = screen;
 
+      let iconFrame: number | null = null;
+      const requestIcons = (): void => {
+        iconFrame = null;
+        if (!mounted) return;
+        try {
+          applyIcons(preview.renderIcons(CHARACTER_IDS, ICON_SIZE));
+        } catch {
+          // Thumbnails are optional; the cards still show their names.
+        }
+      };
+      if (typeof globalThis.requestAnimationFrame === 'function') {
+        iconFrame = globalThis.requestAnimationFrame(requestIcons);
+      } else {
+        requestIcons();
+      }
+
       cleanup = () => {
+        if (iconFrame !== null) {
+          if (typeof globalThis.cancelAnimationFrame === 'function') {
+            globalThis.cancelAnimationFrame(iconFrame);
+          }
+          iconFrame = null;
+        }
         for (const remove of cleanups) remove();
       };
     },

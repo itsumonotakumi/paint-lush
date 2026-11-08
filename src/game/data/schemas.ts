@@ -281,6 +281,7 @@ export const saveDataSchema = z
         stageId: recordKey,
         difficulty: difficultySchema,
         durationSeconds: z.number().int().min(60).max(300),
+        characterId: recordKey.optional(),
       })
       .strict(),
   })

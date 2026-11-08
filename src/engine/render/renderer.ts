@@ -309,6 +309,8 @@ export interface ThreeRendererDeps {
   collision: ICollision;
   teamColors: [number, number];
   localPlayerId: number;
+  /** Roster id per player entity; see RenderModuleDeps.characterOf. */
+  characterOf?: (id: number) => string;
   /** Parsed decoration file for this stage. Validated by createDecor. */
   decor: unknown;
   /** Requested visual quality; 'auto' keeps the touch-device rule. */
@@ -463,6 +465,7 @@ export function createThreeRenderer(deps: ThreeRendererDeps): IRenderer {
     gradient,
     localPlayerId,
     lowDetail,
+    ...(deps.characterOf ? { characterOf: deps.characterOf } : {}),
   };
 
   const effects: EffectsModule = createEffects(moduleDeps);

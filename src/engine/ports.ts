@@ -43,6 +43,8 @@ export interface ITouchControls {
   /** Drops held buttons and pending look, as IInputSource.reset does. */
   reset(): void;
   setVisible(visible: boolean): void;
+  /** Special gauge in 0..1, drawn as a ring on the special button. */
+  setSpecialGauge(value: number): void;
   dispose(): void;
 }
 
@@ -62,6 +64,8 @@ export interface MatchSetup {
   stageId: string;
   difficulty: Difficulty;
   durationSeconds: number;
+  /** Roster id of the local player's ninja; unknown ids fall back to the default. */
+  characterId?: string;
 }
 
 /** Team name, its kana reading, and colour as 0xRRGGBB for this match. */

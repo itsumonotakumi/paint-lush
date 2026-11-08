@@ -15,6 +15,8 @@ export interface RenderModuleDeps {
   /** Shared toon ramp. Owned by the renderer; do not dispose it. */
   gradient: DataTexture;
   localPlayerId: number;
+  /** Roster id for a player entity. Missing means the default character for everyone. */
+  characterOf?(id: number): string;
   /** Phone profile: fewer details, no outline hulls, half particle capacity. */
   lowDetail: boolean;
 }

@@ -49,6 +49,10 @@ class FakeTouch implements ITouchControls {
     this.visible = visible;
   }
 
+  setSpecialGauge(): void {
+    /* Not used by the input manager. */
+  }
+
   dispose(): void {
     this.disposed = true;
   }

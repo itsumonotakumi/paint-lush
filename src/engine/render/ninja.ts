@@ -1,10 +1,7 @@
 import {
   AdditiveBlending,
-  BackSide,
-  BoxGeometry,
   BufferAttribute,
   BufferGeometry,
-  CapsuleGeometry,
   CylinderGeometry,
   DoubleSide,
   Group,
@@ -19,6 +16,15 @@ import type { GameEvent } from '../../core/events';
 import { lerpAngle } from '../../core/math/vec3';
 import type { PlayerView, WorldSnapshot } from '../../core/snapshot';
 import type { EntityId, TeamId, Vec3 } from '../../core/types';
+import { buildCharacter, createCharacterCache } from './characters/builder';
+import { getCharacter } from './characters/defs';
+import { DEFAULT_CHARACTER_ID } from './characters/roster';
+import type {
+  CharacterAnimInput,
+  CharacterAssetCache,
+  CharacterRig,
+  Expression,
+} from './characters/types';
 import type { RenderModule, RenderModuleDeps } from './module';
 import { PALETTE } from './palette';
 import { createNinjaPose, pose } from './ninjaPose';
@@ -31,10 +37,12 @@ const FEET_OFFSET = 0.8;
 const SNAP_DISTANCE_SQUARED = 3 * 3;
 /** Seconds of white flash after a hit. */
 const FLASH_SECONDS = 0.15;
-const FLASH_COLOR = 0xffffff;
-const NO_FLASH_COLOR = 0x000000;
-/** Frequency of the headband tail flutter. */
-const TAIL_FLUTTER = 9;
+/** Seconds the hurt expression lasts after a hit. */
+const HURT_SECONDS = 0.4;
+/** Seconds the happy expression lasts after scoring a kill. */
+const HAPPY_SECONDS = 0.6;
+/** Horizontal speed treated as a full run for rig animations. */
+const FULL_RUN_SPEED = 6;
 /** Ripple lifetime in seconds. */
 const RIPPLE_SECONDS = 1;
 /** Seconds a brush swing animation lasts. */
@@ -78,13 +86,14 @@ interface NinjaVisual {
   id: EntityId;
   group: Group;
   body: Group;
+  rig: CharacterRig;
+  /** Builder base transforms, so lean and bob compose on top of the stoop. */
+  bodyBaseRotX: number;
+  bodyBaseY: number;
   dive: Group;
-  legs: [Group, Group];
-  arms: [Group, Group];
-  tails: [Group, Group];
   ripples: [ToonMesh, ToonMesh];
-  teamMeshes: ToonMesh[];
-  garbMaterial: MeshToonMaterial;
+  /** Blob and ripples still use the module-owned team materials. */
+  diveMeshes: [ToonMesh, ToonMesh, ToonMesh];
   ring: Group;
   ringPetals: BasicMesh[];
   weapon: WeaponVisual | null;
@@ -92,6 +101,8 @@ interface NinjaVisual {
   teamHex: number;
   team: TeamId;
   flash: number;
+  hurt: number;
+  happy: number;
   swing: number;
   /** Last update frame in which this visual was present in the snapshot. */
   lastSeen: number;
@@ -186,12 +197,22 @@ function setRippleScale(ring: ToonMesh, time: number): void {
   ring.scale.set(grow, grow, 0.85 / grow);
 }
 
+function expressionFor(visual: NinjaVisual, player: PlayerView): Expression {
+  if (visual.hurt > 0) return 'hurt';
+  if (player.specialActive === true) return 'power';
+  if (visual.happy > 0) return 'happy';
+  return 'neutral';
+}
+
 /**
- * Draws one bright toon ninja per player, all built from primitives and the
- * shared palette. The module owns its meshes and removes only its own groups.
+ * Draws one bright toon ninja per player from the data-driven roster. The
+ * module owns its groups and removes only its own objects.
  */
 export function createNinjas(deps: RenderModuleDeps): RenderModule {
   const { scene, teamColors, gradient, lowDetail } = deps;
+
+  /** One shared geometry/material cache for every rig in this module. */
+  const cache: CharacterAssetCache = createCharacterCache();
 
   const geometries: BufferGeometry[] = [];
   const materials: MeshToonMaterial[] = [];
@@ -214,23 +235,6 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
 
   /* ---------- shared geometry ---------- */
 
-  const headGeometry = trackGeometry(new SphereGeometry(0.34, 18, 14));
-  const bodyGeometry = trackGeometry(new CapsuleGeometry(0.21, 0.22, 6, 14));
-  const hipGeometry = trackGeometry(new BoxGeometry(0.32, 0.15, 0.22));
-  const armGeometry = trackGeometry(new CapsuleGeometry(0.07, 0.22, 4, 8));
-  const legGeometry = trackGeometry(new BoxGeometry(0.14, 0.36, 0.16));
-  const footGeometry = trackGeometry(new BoxGeometry(0.18, 0.09, 0.26));
-  const eyeGeometry = trackGeometry(new SphereGeometry(0.085, 12, 10));
-  const pupilGeometry = trackGeometry(new SphereGeometry(0.045, 10, 8));
-  const highlightGeometry = trackGeometry(new SphereGeometry(0.018, 8, 6));
-  const maskGeometry = trackGeometry(new SphereGeometry(0.34, 18, 12));
-  const bandGeometry = trackGeometry(new TorusGeometry(0.335, 0.045, 8, 22));
-  const tailGeometry = trackGeometry(new BoxGeometry(0.08, 0.05, 0.35));
-  const scarfGeometry = trackGeometry(new TorusGeometry(0.19, 0.055, 8, 18));
-  const scarfTailGeometry = trackGeometry(new BoxGeometry(0.12, 0.34, 0.06));
-  const gourdGeometry = trackGeometry(new SphereGeometry(0.1, 12, 10));
-  const gourdNeckGeometry = trackGeometry(new CylinderGeometry(0.035, 0.045, 0.08, 8));
-  const cordGeometry = trackGeometry(new BoxGeometry(0.03, 0.18, 0.03));
   const blobGeometry = trackGeometry(new SphereGeometry(0.55, 18, 12));
   const rippleGeometry = trackGeometry(new TorusGeometry(0.5, 0.03, 6, 28));
   const shurikenGeometry = trackGeometry(createShurikenGeometry());
@@ -240,16 +244,6 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
   const petalGeometry = trackGeometry(new PlaneGeometry(0.16, 0.28));
 
   /* ---------- shared materials ---------- */
-
-  const eyeMaterial = trackMaterial(createToonMaterial(PALETTE.outline, gradient));
-  const whiteMaterial = trackMaterial(createToonMaterial(0xffffff, gradient));
-  const gourdMaterial = trackMaterial(createToonMaterial(PALETTE.signYellow, gradient));
-  const outlineMaterial = trackBasic(
-    new MeshBasicMaterial({ color: PALETTE.outline, side: BackSide }),
-  );
-  const highlightMaterial = trackBasic(
-    new MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
-  );
 
   const teamMaterials: [MeshToonMaterial, MeshToonMaterial] = [
     trackMaterial(createToonMaterial(safeHex(teamColors[0]), gradient)),
@@ -304,19 +298,25 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
   const visualById = new Map<EntityId, NinjaVisual>();
   const visuals: NinjaVisual[] = [];
   const scratchPose: NinjaPose = createNinjaPose();
+  const scratchInput: CharacterAnimInput = {
+    time: 0,
+    dtSec: 0,
+    run: 0,
+    airborne: false,
+    expression: 'neutral',
+  };
   let frame = 0;
 
-  function addOutline(parent: Group, source: Mesh, scale: number): void {
-    if (lowDetail) return;
-    const outline = new Mesh(source.geometry, outlineMaterial);
-    outline.position.copy(source.position);
-    outline.scale.copy(source.scale).multiplyScalar(scale);
-    parent.add(outline);
+  function characterIdFor(id: EntityId): string {
+    const requested = deps.characterOf?.(id) ?? DEFAULT_CHARACTER_ID;
+    return typeof requested === 'string' && requested.length > 0
+      ? requested
+      : DEFAULT_CHARACTER_ID;
   }
 
   function detachWeapon(visual: NinjaVisual): void {
     if (visual.weapon === null) return;
-    visual.arms[1].remove(visual.weapon.group);
+    visual.rig.pivots.handR.remove(visual.weapon.group);
     visual.weapon = null;
   }
 
@@ -326,13 +326,13 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
 
     const group = new Group();
     group.userData.weaponKind = kind;
-    group.position.set(0, -0.4, -0.04);
+    group.position.set(0, -0.05, -0.04);
 
     let spinner: BasicMesh | null = null;
     let glow: MeshBasicMaterial | null = null;
 
     if (kind === 'shuriken') {
-      group.position.set(0, -0.38, -0.1);
+      group.position.set(0, -0.05, -0.1);
       const star = new Mesh(shurikenGeometry, teamStarMaterials[team]);
       star.userData.weaponRole = 'shuriken';
       group.add(star);
@@ -362,7 +362,7 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       glow = material;
     }
 
-    visual.arms[1].add(group);
+    visual.rig.pivots.handR.add(group);
     visual.weapon = { kind, group, spinner, glow };
   }
 
@@ -391,137 +391,29 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
 
   function createVisual(id: EntityId, team: TeamId): NinjaVisual {
     const group = new Group();
-    const body = new Group();
+    const rig = buildCharacter(getCharacter(characterIdFor(id)), {
+      gradient,
+      teamColor: safeHex(teamColors[team]),
+      lowDetail,
+      cache,
+      seed: id,
+    });
+
+    /* The rig's feet sit at its origin; drop it to the old waist offset. */
+    rig.root.position.y = -FEET_OFFSET;
+    const body = rig.root;
     group.add(body);
 
     const dive = new Group();
     dive.visible = false;
     group.add(dive);
 
-    const garbMaterial = trackMaterial(createToonMaterial(PALETTE.garb, gradient));
     const teamMaterial = teamMaterials[team];
-    const teamMeshes: ToonMesh[] = [];
 
-    /* torso, hip and head */
-    const torso = new Mesh(bodyGeometry, garbMaterial);
-    torso.position.set(0, 0.12, 0);
-    body.add(torso);
-    addOutline(body, torso, 1.06);
-
-    const hip = new Mesh(hipGeometry, garbMaterial);
-    hip.position.set(0, -0.275, 0);
-    body.add(hip);
-
-    const head = new Mesh(headGeometry, garbMaterial);
-    head.position.set(0, 0.62, 0);
-    body.add(head);
-    addOutline(body, head, 1.06);
-
-    /* face */
-    const leftEye = new Mesh(eyeGeometry, whiteMaterial);
-    leftEye.position.set(-0.11, 0.64, -0.27);
-    leftEye.scale.set(1, 1.35, 0.45);
-    body.add(leftEye);
-
-    const rightEye = new Mesh(eyeGeometry, whiteMaterial);
-    rightEye.position.set(0.11, 0.64, -0.27);
-    rightEye.scale.set(1, 1.35, 0.45);
-    body.add(rightEye);
-
-    for (const side of [-1, 1]) {
-      const pupil = new Mesh(pupilGeometry, eyeMaterial);
-      pupil.position.set(side * 0.11, 0.645, -0.306);
-      body.add(pupil);
-
-      const highlight = new Mesh(highlightGeometry, highlightMaterial);
-      highlight.position.set(side * 0.11 + 0.018, 0.664, -0.338);
-      body.add(highlight);
-    }
-
-    const mask = new Mesh(maskGeometry, garbMaterial);
-    mask.position.set(0, 0.62 - 0.187, 0);
-    mask.scale.set(1.02, 0.55, 1.02);
-    body.add(mask);
-
-    /* headband, knot and trailing tails */
-    const band = new Mesh(bandGeometry, teamMaterial);
-    band.position.set(0, 0.8, 0);
-    band.rotation.x = Math.PI / 2;
-    body.add(band);
-    teamMeshes.push(band);
-
-    const tails: [Group, Group] = [new Group(), new Group()];
-    tails.forEach((pivot, index) => {
-      const side = index === 0 ? -1 : 1;
-      pivot.position.set(side * 0.06, 0.8, 0.27);
-      const tail = new Mesh(tailGeometry, teamMaterial);
-      tail.position.set(0, 0, 0.175);
-      pivot.add(tail);
-      body.add(pivot);
-      teamMeshes.push(tail);
-    });
-
-    /* scarf */
-    const scarf = new Mesh(scarfGeometry, teamMaterial);
-    scarf.position.set(0, 0.34, 0);
-    scarf.rotation.x = Math.PI / 2;
-    body.add(scarf);
-    teamMeshes.push(scarf);
-
-    const scarfTail = new Mesh(scarfTailGeometry, teamMaterial);
-    scarfTail.position.set(0.13, 0.2, 0.15);
-    scarfTail.rotation.set(0.2, 0, 0.18);
-    body.add(scarfTail);
-    teamMeshes.push(scarfTail);
-
-    /* gourd and cord */
-    const gourd = new Mesh(gourdGeometry, gourdMaterial);
-    gourd.position.set(0.28, -0.08, 0.02);
-    gourd.scale.set(1, 1.15, 1);
-    body.add(gourd);
-
-    const gourdNeck = new Mesh(gourdNeckGeometry, gourdMaterial);
-    gourdNeck.position.set(0.28, 0.045, 0.02);
-    body.add(gourdNeck);
-
-    const cord = new Mesh(cordGeometry, teamMaterial);
-    cord.position.set(0.25, 0.12, 0.02);
-    cord.rotation.z = 0.18;
-    body.add(cord);
-    teamMeshes.push(cord);
-
-    /* arms, pivoted at the shoulders */
-    const arms: [Group, Group] = [new Group(), new Group()];
-    arms.forEach((pivot, index) => {
-      const side = index === 0 ? -1 : 1;
-      pivot.position.set(side * 0.28, 0.34, 0);
-      pivot.rotation.z = side * 0.1;
-      const arm = new Mesh(armGeometry, garbMaterial);
-      arm.position.set(0, -0.18, 0);
-      pivot.add(arm);
-      body.add(pivot);
-    });
-
-    /* legs and feet, pivoted at the hips; the feet land at local y = -0.8 */
-    const legs: [Group, Group] = [new Group(), new Group()];
-    legs.forEach((pivot, index) => {
-      const side = index === 0 ? -1 : 1;
-      pivot.position.set(side * 0.09, -0.35, 0);
-      const leg = new Mesh(legGeometry, garbMaterial);
-      leg.position.set(0, -0.18, 0);
-      pivot.add(leg);
-      const foot = new Mesh(footGeometry, garbMaterial);
-      foot.position.set(0, -0.405, -0.04);
-      pivot.add(foot);
-      body.add(pivot);
-    });
-
-    /* dive blob and ripples */
     const blob = new Mesh(blobGeometry, teamMaterial);
     blob.position.set(0, -FEET_OFFSET + 0.08, 0);
     blob.scale.set(1.3, 0.16, 1.3);
     dive.add(blob);
-    teamMeshes.push(blob);
 
     const ripples: [ToonMesh, ToonMesh] = [
       new Mesh(rippleGeometry, teamMaterial),
@@ -531,7 +423,6 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       ripple.position.set(0, -FEET_OFFSET + 0.01, 0);
       ripple.rotation.x = -Math.PI / 2;
       dive.add(ripple);
-      teamMeshes.push(ripple);
     }
 
     const special = createSpecialRing(team);
@@ -541,13 +432,12 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       id,
       group,
       body,
+      rig,
+      bodyBaseRotX: rig.pivots.body.rotation.x,
+      bodyBaseY: rig.pivots.body.position.y,
       dive,
-      legs,
-      arms,
-      tails,
       ripples,
-      teamMeshes,
-      garbMaterial,
+      diveMeshes: [blob, ripples[0], ripples[1]],
       ring: special.ring,
       ringPetals: special.petals,
       weapon: null,
@@ -555,6 +445,8 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       teamHex: safeHex(teamColors[team]),
       team,
       flash: 0,
+      hurt: 0,
+      happy: 0,
       swing: 0,
       lastSeen: -1,
     };
@@ -587,9 +479,10 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       if (visual.team !== player.team) {
         visual.team = player.team;
         visual.teamHex = safeHex(teamColors[player.team]);
+        visual.rig.setTeamColor(visual.teamHex);
         const teamMaterial = teamMaterials[player.team];
-        for (let m = 0; m < visual.teamMeshes.length; m += 1) {
-          const mesh = visual.teamMeshes[m];
+        for (let m = 0; m < visual.diveMeshes.length; m += 1) {
+          const mesh = visual.diveMeshes[m];
           if (mesh !== undefined) mesh.material = teamMaterial;
         }
         for (let m = 0; m < visual.ringPetals.length; m += 1) {
@@ -628,33 +521,31 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       visual.body.visible = !diving;
       visual.dive.visible = diving;
 
+      const pivots = visual.rig.pivots;
       if (player.state === 'air') {
-        visual.legs[0].rotation.x = scratchPose.legSwing;
-        visual.legs[1].rotation.x = scratchPose.legSwing;
-        visual.arms[0].rotation.x = scratchPose.armSwing;
-        visual.arms[1].rotation.x = scratchPose.armSwing;
+        pivots.legL.rotation.x = scratchPose.legSwing;
+        pivots.legR.rotation.x = scratchPose.legSwing;
+        pivots.armL.rotation.x = scratchPose.armSwing;
+        pivots.armR.rotation.x = scratchPose.armSwing;
       } else {
-        visual.legs[0].rotation.x = scratchPose.legSwing;
-        visual.legs[1].rotation.x = -scratchPose.legSwing;
-        visual.arms[0].rotation.x = scratchPose.armSwing;
-        visual.arms[1].rotation.x = -scratchPose.armSwing;
+        pivots.legL.rotation.x = scratchPose.legSwing;
+        pivots.legR.rotation.x = -scratchPose.legSwing;
+        pivots.armL.rotation.x = scratchPose.armSwing;
+        pivots.armR.rotation.x = -scratchPose.armSwing;
       }
 
-      visual.body.rotation.x = -scratchPose.lean;
-      visual.body.position.y = scratchPose.bounce;
+      pivots.body.rotation.x = visual.bodyBaseRotX - scratchPose.lean;
+      pivots.body.position.y = visual.bodyBaseY + scratchPose.bounce;
 
-      if (player.state === 'air') {
-        visual.tails[0].rotation.x = 0;
-        visual.tails[0].rotation.y = 0;
-        visual.tails[1].rotation.x = 0;
-        visual.tails[1].rotation.y = 0;
-      } else {
-        const flutter = Math.sin(elapsed * TAIL_FLUTTER);
-        visual.tails[0].rotation.x = 0.12 + scratchPose.tailSwing + flutter * 0.3;
-        visual.tails[0].rotation.y = Math.sin(elapsed * TAIL_FLUTTER + 0.6) * 0.12;
-        visual.tails[1].rotation.x = 0.12 + scratchPose.tailSwing + flutter * 0.3;
-        visual.tails[1].rotation.y = Math.sin(elapsed * TAIL_FLUTTER - 0.6) * 0.12;
-      }
+      if (visual.hurt > 0) visual.hurt = Math.max(0, visual.hurt - dt);
+      if (visual.happy > 0) visual.happy = Math.max(0, visual.happy - dt);
+
+      scratchInput.time = elapsed;
+      scratchInput.dtSec = dt;
+      scratchInput.run = clamp01(speed / FULL_RUN_SPEED);
+      scratchInput.airborne = player.state === 'air';
+      scratchInput.expression = expressionFor(visual, player);
+      visual.rig.update(scratchInput);
 
       if (diving) {
         setRippleScale(visual.ripples[0], elapsed);
@@ -696,7 +587,7 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
       const visual = visuals[i];
       if (visual === undefined) continue;
       if (visual.flash > 0) visual.flash = Math.max(0, visual.flash - dt);
-      visual.garbMaterial.emissive.setHex(visual.flash > 0 ? FLASH_COLOR : NO_FLASH_COLOR);
+      visual.rig.setFlash(visual.flash > 0 ? 1 : 0);
     }
   }
 
@@ -704,7 +595,15 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
     if (disposed) return;
     if (event.t === 'hit') {
       const visual = visualById.get(event.target);
-      if (visual !== undefined) visual.flash = FLASH_SECONDS;
+      if (visual !== undefined) {
+        visual.flash = FLASH_SECONDS;
+        visual.hurt = HURT_SECONDS;
+      }
+      return;
+    }
+    if (event.t === 'kill') {
+      const visual = visualById.get(event.killer);
+      if (visual !== undefined) visual.happy = HAPPY_SECONDS;
       return;
     }
     if (event.t === 'swing') {
@@ -719,10 +618,15 @@ export function createNinjas(deps: RenderModuleDeps): RenderModule {
 
     for (let i = 0; i < visuals.length; i += 1) {
       const visual = visuals[i];
-      if (visual !== undefined) scene.remove(visual.group);
+      if (visual !== undefined) {
+        scene.remove(visual.group);
+        visual.rig.dispose();
+      }
     }
     visualById.clear();
     visuals.length = 0;
+
+    cache.dispose();
 
     for (const geometry of geometries) geometry.dispose();
     geometries.length = 0;

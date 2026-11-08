@@ -16,6 +16,8 @@ export interface TouchControlsOptions {
   layout: TouchLayout;
   /** Radians of view rotation per pixel dragged on the right half. */
   lookSensitivity: number;
+  /** Injectable time source for the double-tap guard. Defaults to performance.now. */
+  now?: () => number;
 }
 
 type ButtonAction = 'fire' | 'jump' | 'dive' | 'sub' | 'special' | 'pause';
@@ -37,6 +39,8 @@ interface ButtonState {
 const STICK_RADIUS = 60;
 /** Radial fraction of the stick that reads as zero. */
 const STICK_DEADZONE = 0.1;
+/** Two touchends closer than this are treated as a double-tap zoom gesture. */
+const DOUBLE_TAP_MS = 350;
 
 const BUTTONS: readonly ButtonSpec[] = [
   { action: 'fire', label: 'うつ', aria: 'うつ', className: 'pr-touch__button--fire' },
@@ -124,6 +128,7 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
   const offsetY = sanitizeOffset(options.layout.offsetY);
   const lookSensitivity = sanitizeSensitivity(options.lookSensitivity);
   const stickRadius = STICK_RADIUS * scale;
+  const now = options.now ?? (() => performance.now());
 
   const root = createDiv('pr-touch');
   setVar(root, '--pr-touch-scale', String(scale));
@@ -140,6 +145,7 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
 
   const buttonLayer = createDiv('pr-touch__buttons');
   const buttonStates: ButtonState[] = [];
+  let specialButton: HTMLButtonElement | null = null;
 
   for (const spec of BUTTONS) {
     const el = document.createElement('button');
@@ -148,6 +154,7 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
     el.textContent = spec.label;
     el.setAttribute('aria-label', spec.aria);
     el.dataset['action'] = spec.action;
+    if (spec.action === 'special') specialButton = el;
     buttonLayer.append(el);
     buttonStates.push({ action: spec.action, el, pointers: new Set<number>() });
   }
@@ -166,6 +173,62 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
   let mounted = false;
   let visible = true;
   let disposed = false;
+  let guardsAttached = false;
+  let lastTouchEndAt = Number.NEGATIVE_INFINITY;
+  let appliedGauge = Number.NaN;
+
+  // Safari fires these proprietary events when two fingers move together.
+  const onGesture = (event: Event): void => {
+    if (disposed || !guardsAttached) return;
+    event.preventDefault();
+  };
+
+  const onTouchMove = (event: Event): void => {
+    if (disposed || !visible || !guardsAttached) return;
+    if (event.cancelable) event.preventDefault();
+  };
+
+  const onTouchEnd = (event: Event): void => {
+    if (disposed || !visible || !guardsAttached) return;
+    const stamp = now();
+    if (!Number.isFinite(stamp)) {
+      lastTouchEndAt = Number.NEGATIVE_INFINITY;
+      return;
+    }
+    const delta = stamp - lastTouchEndAt;
+    if (delta >= 0 && delta <= DOUBLE_TAP_MS) {
+      event.preventDefault();
+    }
+    lastTouchEndAt = stamp;
+  };
+
+  const onDoubleClick = (event: Event): void => {
+    if (disposed || !visible || !guardsAttached) return;
+    event.preventDefault();
+  };
+
+  const documentTarget: EventTarget = document;
+  const guardOptions: AddEventListenerOptions = { passive: false };
+  const attachGuards = (): void => {
+    if (guardsAttached) return;
+    guardsAttached = true;
+    documentTarget.addEventListener('gesturestart', onGesture, guardOptions);
+    documentTarget.addEventListener('gesturechange', onGesture, guardOptions);
+    documentTarget.addEventListener('gestureend', onGesture, guardOptions);
+    documentTarget.addEventListener('touchmove', onTouchMove, guardOptions);
+    documentTarget.addEventListener('touchend', onTouchEnd, guardOptions);
+    documentTarget.addEventListener('dblclick', onDoubleClick, guardOptions);
+  };
+  const detachGuards = (): void => {
+    if (!guardsAttached) return;
+    guardsAttached = false;
+    documentTarget.removeEventListener('gesturestart', onGesture, guardOptions);
+    documentTarget.removeEventListener('gesturechange', onGesture, guardOptions);
+    documentTarget.removeEventListener('gestureend', onGesture, guardOptions);
+    documentTarget.removeEventListener('touchmove', onTouchMove, guardOptions);
+    documentTarget.removeEventListener('touchend', onTouchEnd, guardOptions);
+    documentTarget.removeEventListener('dblclick', onDoubleClick, guardOptions);
+  };
 
   let stickPointerId = -1;
   let stickStartX = 0;
@@ -383,9 +446,10 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
   }
 
   const mount = (host: HTMLElement): void => {
-    if (disposed) return;
+    if (disposed || mounted) return;
     host.appendChild(root);
     mounted = true;
+    attachGuards();
   };
 
   const read = (): InputActions => {
@@ -420,13 +484,28 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
     visible = next;
     root.classList.toggle('pr-touch--hidden', !next);
     root.hidden = !next;
-    if (!next) reset();
+    if (!next) {
+      lastTouchEndAt = Number.NEGATIVE_INFINITY;
+      reset();
+    }
+  };
+
+  /** Clamps to 0..1, maps non-finite input to 0, and avoids redundant style writes. */
+  const setSpecialGauge = (value: number): void => {
+    if (disposed) return;
+    const clamped = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+    if (clamped === appliedGauge) return;
+    appliedGauge = clamped;
+    if (specialButton === null) return;
+    setVar(specialButton, '--pr-special-fill', `${(clamped * 100).toFixed(1)}%`);
+    specialButton.classList.toggle('pr-touch__button--ready', clamped >= 0.999);
   };
 
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     visible = false;
+    detachGuards();
     for (const remove of removals) remove();
     removals.length = 0;
     clearStick();
@@ -439,5 +518,5 @@ export function createTouchControls(options: TouchControlsOptions): ITouchContro
     mounted = false;
   };
 
-  return { mount, read, reset, setVisible, dispose };
+  return { mount, read, reset, setVisible, setSpecialGauge, dispose };
 }

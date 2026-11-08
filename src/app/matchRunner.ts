@@ -6,6 +6,7 @@ import type { PlayerView, WorldSnapshot } from '../core/snapshot';
 import { FIXED_DT, type EntityId, type TeamId, type Vec3 } from '../core/types';
 import { createInputManager } from '../engine/input/inputManager';
 import { createTouchControls } from '../engine/input/touch/touchControls';
+import { assignCharacters, DEFAULT_CHARACTER_ID } from '../engine/render/characters/roster';
 import type {
   IAudio,
   IInputSource,
@@ -414,6 +415,13 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       mode: training ? 'training' : 'match',
     });
 
+    const characters = assignCharacters(
+      roster.map((entry) => entry.id),
+      LOCAL_PLAYER_ID,
+      training ? data.last.characterId : setup.characterId,
+      safeSeed,
+    );
+
     const canvas = deps.canvas;
     const root = deps.root;
     const audio = deps.audio;
@@ -425,6 +433,7 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       collision: sim.collision,
       teamColors: [teams[0].color, teams[1].color],
       localPlayerId: LOCAL_PLAYER_ID,
+      characterOf: (id: number): string => characters.get(id) ?? DEFAULT_CHARACTER_ID,
       decor: decorFile,
       quality: data.settings.quality,
     });
@@ -769,7 +778,10 @@ export function createMatchRunner(deps: MatchRunnerDeps): MatchRunner {
       const alpha = Math.min(Math.max(accumulator / FIXED_DT, 0), 1);
       renderer.render(prev, curr, alpha, LOCAL_PLAYER_ID);
       const me = findLocal(curr.players);
-      if (me !== null) hud.update(me, curr, totalCells);
+      if (me !== null) {
+        hud.update(me, curr, totalCells);
+        touch?.setSpecialGauge(me.gauge);
+      }
     };
 
     cleanupCurrent = () => {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTouchControls } from './touchControls';
 import type { TouchControlsOptions } from './touchControls';
 
@@ -7,6 +7,14 @@ const defaultOptions: TouchControlsOptions = {
   layout: { scale: 1, offsetX: 0, offsetY: 0 },
   lookSensitivity: 0.01,
 };
+
+const liveControls: ReturnType<typeof createTouchControls>[] = [];
+
+afterEach(() => {
+  for (const controls of liveControls.splice(0)) controls.dispose();
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+});
 
 interface Setup {
   controls: ReturnType<typeof createTouchControls>;
@@ -28,9 +36,11 @@ function setup(options: Partial<TouchControlsOptions> = {}): Setup {
     layout: { ...defaultOptions.layout, ...options.layout },
     lookSensitivity: options.lookSensitivity ?? defaultOptions.lookSensitivity,
   };
+  if (options.now !== undefined) merged.now = options.now;
   const host = document.createElement('div');
   document.body.append(host);
   const controls = createTouchControls(merged);
+  liveControls.push(controls);
   controls.mount(host);
   const root = query<HTMLElement>(host, '.pr-touch');
   return {
@@ -294,5 +304,145 @@ describe('createTouchControls', () => {
 
     // Disposing twice is harmless.
     s.controls.dispose();
+  });
+});
+
+function dispatch(type: string, cancelable = true): Event {
+  const event = new Event(type, { cancelable, bubbles: true });
+  document.dispatchEvent(event);
+  return event;
+}
+
+describe('touch zoom guards', () => {
+  it('adds passive:false document listeners once on mount and removes them on dispose', () => {
+    const addSpy = vi.spyOn(document, 'addEventListener');
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+    const controls = createTouchControls(defaultOptions);
+    const host = document.createElement('div');
+    document.body.append(host);
+
+    controls.mount(host);
+    controls.mount(host);
+
+    const added = addSpy.mock.calls.map((call) => call[0]);
+    expect(added.filter((type) => type === 'gesturestart')).toHaveLength(1);
+    expect(added.filter((type) => type === 'gesturechange')).toHaveLength(1);
+    expect(added.filter((type) => type === 'gestureend')).toHaveLength(1);
+    expect(added.filter((type) => type === 'touchmove')).toHaveLength(1);
+    expect(added.filter((type) => type === 'touchend')).toHaveLength(1);
+    expect(added.filter((type) => type === 'dblclick')).toHaveLength(1);
+
+    const gestureAdd = addSpy.mock.calls.find((call) => call[0] === 'gesturestart');
+    expect(gestureAdd?.[2]).toEqual({ passive: false });
+
+    controls.dispose();
+    const removed = removeSpy.mock.calls.map((call) => call[0]);
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend', 'touchmove', 'touchend', 'dblclick']) {
+      expect(removed).toContain(type);
+    }
+  });
+
+  it('blocks gestures while mounted, and page movement only while visible', () => {
+    const s = setup();
+
+    expect(dispatch('gesturestart').defaultPrevented).toBe(true);
+    expect(dispatch('gesturechange').defaultPrevented).toBe(true);
+    expect(dispatch('gestureend').defaultPrevented).toBe(true);
+    expect(dispatch('touchmove').defaultPrevented).toBe(true);
+    expect(dispatch('dblclick').defaultPrevented).toBe(true);
+
+    // A non-cancelable move cannot be blocked and must not throw.
+    expect(dispatch('touchmove', false).defaultPrevented).toBe(false);
+
+    s.controls.setVisible(false);
+    expect(dispatch('touchmove').defaultPrevented).toBe(false);
+    expect(dispatch('dblclick').defaultPrevented).toBe(false);
+    // The Safari gesture events stay blocked even under a pause menu.
+    expect(dispatch('gesturestart').defaultPrevented).toBe(true);
+
+    s.controls.setVisible(true);
+    expect(dispatch('touchmove').defaultPrevented).toBe(true);
+  });
+
+  it('prevents the second touchend only when it lands within 350 ms', () => {
+    let clock = 0;
+    const s = setup({ now: () => clock });
+
+    clock = 1000;
+    expect(dispatch('touchend').defaultPrevented).toBe(false);
+    clock = 1100;
+    expect(dispatch('touchend').defaultPrevented).toBe(true);
+    clock = 1500;
+    expect(dispatch('touchend').defaultPrevented).toBe(false);
+    clock = 1510;
+    expect(dispatch('touchend').defaultPrevented).toBe(true);
+
+    // Hiding the controls forgets the previous tap.
+    s.controls.setVisible(false);
+    s.controls.setVisible(true);
+    clock = 1600;
+    expect(dispatch('touchend').defaultPrevented).toBe(false);
+  });
+
+  it('stops guarding after dispose', () => {
+    const s = setup();
+    s.controls.dispose();
+    expect(dispatch('gesturestart').defaultPrevented).toBe(false);
+    expect(dispatch('touchmove').defaultPrevented).toBe(false);
+  });
+});
+
+describe('setSpecialGauge', () => {
+  it('clamps values, writes a percentage and toggles the ready class', () => {
+    const s = setup();
+    const special = s.button('おうぎ');
+
+    s.controls.setSpecialGauge(0.375);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('37.5%');
+    expect(special.classList.contains('pr-touch__button--ready')).toBe(false);
+
+    s.controls.setSpecialGauge(0.998);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('99.8%');
+    expect(special.classList.contains('pr-touch__button--ready')).toBe(false);
+
+    s.controls.setSpecialGauge(0.999);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('99.9%');
+    expect(special.classList.contains('pr-touch__button--ready')).toBe(true);
+
+    s.controls.setSpecialGauge(5);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('100.0%');
+    expect(special.classList.contains('pr-touch__button--ready')).toBe(true);
+
+    s.controls.setSpecialGauge(-2);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('0.0%');
+    expect(special.classList.contains('pr-touch__button--ready')).toBe(false);
+
+    s.controls.setSpecialGauge(Number.NaN);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('0.0%');
+    s.controls.setSpecialGauge(Number.POSITIVE_INFINITY);
+    expect(special.style.getPropertyValue('--pr-special-fill')).toBe('0.0%');
+  });
+
+  it('writes the CSS variable only when the clamped value changes', () => {
+    const s = setup();
+    const special = s.button('おうぎ');
+    const spy = vi.spyOn(special.style, 'setProperty');
+
+    s.controls.setSpecialGauge(0.5);
+    s.controls.setSpecialGauge(0.5);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Different raw values that clamp to the same result do not write again.
+    s.controls.setSpecialGauge(4);
+    s.controls.setSpecialGauge(9);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('clamps before writing so out-of-range inputs cannot leak', () => {
+    const s = setup();
+    const special = s.button('おうぎ');
+    const spy = vi.spyOn(special.style, 'setProperty');
+    s.controls.setSpecialGauge(Number.POSITIVE_INFINITY);
+    expect(spy).toHaveBeenCalledWith('--pr-special-fill', '0.0%');
   });
 });

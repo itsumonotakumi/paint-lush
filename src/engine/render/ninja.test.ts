@@ -1,11 +1,38 @@
-import { Mesh, MeshBasicMaterial, MeshToonMaterial, Object3D, Scene } from 'three';
-import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  MeshToonMaterial,
+  Object3D,
+  Scene,
+} from 'three';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlayerView, WorldSnapshot } from '../../core/snapshot';
 import type { GameEvent } from '../../core/events';
+import { DEFAULT_CHARACTER_ID } from './characters/roster';
 import { createNinjas, weaponVisualKind } from './ninja';
-import { PALETTE } from './palette';
 import { createToonGradient } from './toon';
-import type { RenderModule } from './module';
+import type { RenderModule, RenderModuleDeps } from './module';
+
+const cacheDisposeSpy = vi.hoisted(() => ({ dispose: vi.fn() }));
+
+vi.mock('./characters/builder', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./characters/builder')>();
+  return {
+    ...actual,
+    createCharacterCache: () => {
+      const cache = actual.createCharacterCache();
+      const originalDispose = cache.dispose.bind(cache);
+      cache.dispose = () => {
+        cacheDisposeSpy.dispose();
+        originalDispose();
+      };
+      return cache;
+    },
+  };
+});
+
+const TEAM_COLORS: [number, number] = [0x2e5bbf, 0xd93a4a];
 
 function snapshot(players: PlayerView[]): WorldSnapshot {
   return {
@@ -38,19 +65,32 @@ function player(overrides: Partial<PlayerView> = {}): PlayerView {
   };
 }
 
-function groupsIn(scene: Scene): Object3D[] {
-  return scene.children.filter((child) => child.type === 'Group');
+function groupsIn(scene: Scene): Group[] {
+  return scene.children.filter((child): child is Group => child instanceof Group);
 }
 
-function garbFlash(group: Object3D): number {
-  let hex = -1;
+function bodyOf(scene: Scene): Object3D | undefined {
+  return groupsIn(scene)[0]?.children[0];
+}
+
+function maxEmissive(group: Object3D): number {
+  let hex = 0;
   group.traverse((node) => {
-    const mesh = node as Mesh;
-    if (mesh.material instanceof MeshToonMaterial && mesh.material.color.getHex() === PALETTE.garb) {
-      hex = mesh.material.emissive.getHex();
+    if (node instanceof Mesh && node.material instanceof MeshToonMaterial) {
+      hex = Math.max(hex, node.material.emissive.getHex());
     }
   });
   return hex;
+}
+
+function toonHexes(group: Object3D): number[] {
+  const hexes: number[] = [];
+  group.traverse((node) => {
+    if (node instanceof Mesh && node.material instanceof MeshToonMaterial) {
+      hexes.push(node.material.color.getHex());
+    }
+  });
+  return hexes;
 }
 
 function weaponNode(scene: Scene, role: string): Mesh | undefined {
@@ -78,18 +118,28 @@ describe('ninja render module', () => {
   let sentinel: Object3D;
   let module: RenderModule;
 
+  function makeModule(characterOf?: (id: number) => string): RenderModule {
+    const deps: RenderModuleDeps = {
+      scene,
+      teamColors: TEAM_COLORS,
+      gradient,
+      localPlayerId: 1,
+      lowDetail: false,
+    };
+    if (characterOf !== undefined) deps.characterOf = characterOf;
+    return createNinjas(deps);
+  }
+
   beforeEach(() => {
     scene = new Scene();
     gradient = createToonGradient();
     sentinel = new Object3D();
     scene.add(sentinel);
-    module = createNinjas({
-      scene,
-      teamColors: [0x2e5bbf, 0xd93a4a],
-      gradient,
-      localPlayerId: 1,
-      lowDetail: false,
-    });
+    module = makeModule();
+  });
+
+  afterEach(() => {
+    module.dispose();
   });
 
   it('draws one group per player and leaves other scene objects alone', () => {
@@ -165,20 +215,20 @@ describe('ninja render module', () => {
     expect(group.visible).toBe(false);
   });
 
-  it('flashes the garb white for 0.15 s after a hit', () => {
+  it('flashes the rig white for 0.15 s after a hit', () => {
     const players = [player({ id: 1 })];
     module.update(1 / 60, snapshot([]), snapshot(players), 0);
-    const group = groupsIn(scene)[0];
-    if (group === undefined) throw new Error('missing ninja group');
-    expect(garbFlash(group)).toBe(0x000000);
+    const body = bodyOf(scene);
+    if (body === undefined) throw new Error('missing ninja body');
+    expect(maxEmissive(body)).toBe(0x000000);
 
     const hit: GameEvent = { t: 'hit', target: 1, damage: 10, pos: { x: 0, y: 0, z: 0 } };
     module.handle?.(hit);
     module.update(0.01, snapshot(players), snapshot(players), 0);
-    expect(garbFlash(group)).toBe(0xffffff);
+    expect(maxEmissive(body)).toBe(0xffffff);
 
     module.update(0.2, snapshot(players), snapshot(players), 0);
-    expect(garbFlash(group)).toBe(0x000000);
+    expect(maxEmissive(body)).toBe(0x000000);
   });
 
   it('hangs the matching weapon model on each ninja', () => {
@@ -248,6 +298,85 @@ describe('ninja render module', () => {
     expect(brush.rotation.x).toBeCloseTo(0, 6);
   });
 
+  it('builds a different rig for each roster id from characterOf', () => {
+    module.dispose();
+    module = makeModule((id) => (id === 1 ? 'komomo' : 'gonta'));
+
+    const players = [player({ id: 1 }), player({ id: 2, team: 1 })];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+
+    const groups = groupsIn(scene);
+    expect(groups).toHaveLength(2);
+    const firstId = groups[0]?.children[0]?.name;
+    const secondId = groups[1]?.children[0]?.name;
+    expect(firstId).toBe('komomo');
+    expect(secondId).toBe('gonta');
+    expect(firstId).not.toBe(secondId);
+  });
+
+  it('falls back to the default character for an unknown id', () => {
+    module.dispose();
+    module = makeModule(() => 'not-in-the-roster');
+
+    module.update(1 / 60, snapshot([]), snapshot([player({ id: 1 })]), 0);
+    const body = bodyOf(scene);
+    if (body === undefined) throw new Error('missing ninja body');
+    expect(body.name).toBe(DEFAULT_CHARACTER_ID);
+  });
+
+  it('shows the hurt expression for 0.4 s after a hit and then relaxes', () => {
+    const players = [player({ id: 1 })];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+    const body = bodyOf(scene);
+    if (body === undefined) throw new Error('missing ninja body');
+    const mouthO = body.getObjectByName('mouth-o');
+    if (mouthO === undefined) throw new Error('missing hurt mouth');
+    expect(mouthO.visible).toBe(false);
+
+    module.handle?.({ t: 'hit', target: 1, damage: 10, pos: { x: 0, y: 0, z: 0 } });
+    module.update(0.1, snapshot(players), snapshot(players), 0);
+    expect(mouthO.visible).toBe(true);
+
+    module.update(0.5, snapshot(players), snapshot(players), 0);
+    expect(mouthO.visible).toBe(false);
+  });
+
+  it('shows the happy expression for 0.6 s after scoring a kill', () => {
+    const players = [player({ id: 1 }), player({ id: 2, team: 1 })];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+    const body = bodyOf(scene);
+    if (body === undefined) throw new Error('missing ninja body');
+    const mouthWide = body.getObjectByName('mouth-wide');
+    if (mouthWide === undefined) throw new Error('missing happy mouth');
+    expect(mouthWide.visible).toBe(false);
+
+    module.handle?.({
+      t: 'kill',
+      killer: 1,
+      victim: 2,
+      pos: { x: 0, y: 0, z: 0 },
+    });
+    module.update(0.1, snapshot(players), snapshot(players), 0);
+    expect(mouthWide.visible).toBe(true);
+
+    module.update(0.7, snapshot(players), snapshot(players), 0);
+    expect(mouthWide.visible).toBe(false);
+  });
+
+  it('recolours the rig team meshes when a player switches team', () => {
+    const players = [player({ id: 1, team: 0, weaponId: 'none' })];
+    module.update(1 / 60, snapshot([]), snapshot(players), 0);
+    const body = bodyOf(scene);
+    if (body === undefined) throw new Error('missing ninja body');
+    expect(toonHexes(body)).toContain(TEAM_COLORS[0]);
+
+    const switched = [player({ id: 1, team: 1, weaponId: 'none' })];
+    module.update(1 / 60, snapshot(players), snapshot(switched), 0);
+    const hexes = toonHexes(body);
+    expect(hexes).toContain(TEAM_COLORS[1]);
+    expect(hexes).not.toContain(TEAM_COLORS[0]);
+  });
+
   it('disposes its own groups but keeps the scene and gradient usable', () => {
     const players = [player({ id: 1 }), player({ id: 2, team: 1 })];
     module.update(1 / 60, snapshot([]), snapshot(players), 0);
@@ -260,5 +389,15 @@ describe('ninja render module', () => {
     expect(() => module.dispose()).not.toThrow();
     module.update(0.1, snapshot(players), snapshot(players), 0);
     expect(groupsIn(scene)).toHaveLength(0);
+  });
+
+  it('disposes the shared character cache when the module is disposed', () => {
+    module.dispose();
+    cacheDisposeSpy.dispose.mockClear();
+
+    module = makeModule();
+    module.update(1 / 60, snapshot([]), snapshot([player({ id: 1 })]), 0);
+    module.dispose();
+    expect(cacheDisposeSpy.dispose).toHaveBeenCalledTimes(1);
   });
 });

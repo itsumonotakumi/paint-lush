@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatchResult } from '../../game/contracts';
 import type { SaveData } from '../../game/data/schemas';
 import type { IScreen, MatchSetup, ScreenContext, ScreenId, ScreenParams, TeamLabel } from '../../engine/ports';
+import { getCharacter } from '../../engine/render/characters/defs';
+import { CHARACTER_IDS, DEFAULT_CHARACTER_ID } from '../../engine/render/characters/roster';
 import { createBootScreen } from './boot';
 import { createCreditsScreen } from './credits';
 import { createScreens } from './index';
@@ -11,6 +13,24 @@ import { createMenuScreen } from './menu';
 import { createResultScreen } from './result';
 import { createSetupScreen } from './setup';
 import { createTitleScreen } from './title';
+
+const previewMock = vi.hoisted(() => ({
+  show: vi.fn(),
+  setBack: vi.fn(),
+  dispose: vi.fn(),
+  renderIcons: vi.fn<(ids: readonly string[], size: number) => Map<string, string>>(
+    () => new Map<string, string>(),
+  ),
+}));
+
+vi.mock('./characterPreview', () => ({
+  createCharacterPreview: () => ({
+    show: previewMock.show,
+    setBack: previewMock.setBack,
+    renderIcons: previewMock.renderIcons,
+    dispose: previewMock.dispose,
+  }),
+}));
 
 const roots: HTMLElement[] = [];
 
@@ -182,8 +202,16 @@ const TEAMS: readonly [TeamLabel, TeamLabel] = [
   { name: '青龍', reading: 'せいりゅう', color: 0x2e7bff },
 ];
 
+beforeEach(() => {
+  previewMock.show.mockClear();
+  previewMock.setBack.mockClear();
+  previewMock.dispose.mockClear();
+  previewMock.renderIcons.mockReset();
+});
+
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   for (const root of roots) root.remove();
   roots.length = 0;
   vi.restoreAllMocks();
@@ -315,7 +343,7 @@ describe('setup screen', () => {
     const selected = Array.from(root.querySelectorAll<HTMLButtonElement>('.pr-choice.is-selected')).map(
       (button) => button.dataset.value,
     );
-    expect(selected.sort()).toEqual(['120', 'hard', 'karakuri-port', 'oofude']);
+    expect(selected.sort()).toEqual(['120', 'hard', 'hayate', 'karakuri-port', 'oofude']);
 
     expect(rubyReading(choice(root, 'neon-town'), '')).toBe('じょうかまち');
     expect(rubyReading(choice(root, 'karakuri-port'), '')).toBe('みなと');
@@ -345,6 +373,7 @@ describe('setup screen', () => {
       stageId: 'neon-town',
       difficulty: 'easy',
       durationSeconds: 60,
+      characterId: 'hayate',
     });
     expect(saved?.records).toEqual(makeSaveData().records);
     expect(saved?.settings).toEqual(makeSaveData().settings);
@@ -353,7 +382,13 @@ describe('setup screen', () => {
         id: 'loading',
         params: {
           kind: 'loading',
-          setup: { weaponId: 'iro-shuriken', stageId: 'neon-town', difficulty: 'easy', durationSeconds: 60 },
+          setup: {
+            weaponId: 'iro-shuriken',
+            stageId: 'neon-town',
+            difficulty: 'easy',
+            durationSeconds: 60,
+            characterId: 'hayate',
+          },
         },
       },
     ]);
@@ -371,8 +406,240 @@ describe('setup screen', () => {
     const selected = Array.from(root.querySelectorAll<HTMLButtonElement>('.pr-choice.is-selected')).map(
       (button) => button.dataset.value,
     );
-    expect(selected.sort()).toEqual(['60', 'iro-shuriken', 'neon-town', 'normal']);
+    expect(selected.sort()).toEqual(['60', 'hayate', 'iro-shuriken', 'neon-town', 'normal']);
     screen.unmount();
+  });
+});
+
+describe('setup character selection', () => {
+  it('renders the roster in order with kana names and colour bands', () => {
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    const cards = Array.from(root.querySelectorAll<HTMLButtonElement>('.pr-character-card'));
+    expect(cards).toHaveLength(CHARACTER_IDS.length);
+    expect(cards.map((card) => card.dataset.value)).toEqual([...CHARACTER_IDS]);
+    expect(cards.map((card) => card.querySelector('.pr-character-card__name')?.textContent)).toEqual(
+      CHARACTER_IDS.map((id) => getCharacter(id).name),
+    );
+
+    for (const id of CHARACTER_IDS) {
+      const def = getCharacter(id);
+      const card = cards.find((item) => item.dataset.value === id);
+      const band = card?.querySelector<HTMLElement>('.pr-character-card__band');
+      expect(band?.style.getPropertyValue('--pr-char-garb')).toBe(def.colors.garb);
+      expect(band?.style.getPropertyValue('--pr-char-accent')).toBe(def.colors.accent);
+    }
+
+    expect(choice(root, DEFAULT_CHARACTER_ID).getAttribute('aria-checked')).toBe('true');
+    expect(root.querySelectorAll('.pr-character-card[aria-checked="true"]')).toHaveLength(1);
+    // No thumbnails until the deferred icon pass runs.
+    expect(root.querySelectorAll('.pr-character-card__icon')).toHaveLength(0);
+    expect(previewMock.show).toHaveBeenCalledWith(DEFAULT_CHARACTER_ID);
+    expect(root.querySelector('.pr-character-preview__name')?.textContent).toBe(
+      getCharacter(DEFAULT_CHARACTER_ID).name,
+    );
+    expect(root.textContent).toContain('みための ちがい だけ だよ');
+    screen.unmount();
+  });
+
+  it('adds card thumbnails only for valid PNG data URLs', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+    previewMock.renderIcons.mockReturnValueOnce(
+      new Map<string, string>([
+        ['hayate', png],
+        ['komomo', 'https://example.test/komomo.png'],
+        ['gonta', 'data:image/svg+xml;base64,PHN2Zz4='],
+        ['kasane', 'javascript:alert(1)'],
+        ['nyanta', 'data:image/png;base64,'],
+      ]),
+    );
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
+      callback(0);
+      return 7;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (): void => {
+      /* nothing to cancel after the frame ran */
+    });
+
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    expect(previewMock.renderIcons).toHaveBeenCalledTimes(1);
+    const args = previewMock.renderIcons.mock.calls[0];
+    expect(args?.[0]).toEqual([...CHARACTER_IDS]);
+    expect(args?.[1]).toBeGreaterThan(0);
+
+    const icons = Array.from(root.querySelectorAll<HTMLImageElement>('.pr-character-card__icon'));
+    expect(icons).toHaveLength(1);
+    expect(icons[0]?.getAttribute('src')).toBe(png);
+    expect(icons[0]?.alt).toBe(getCharacter('hayate').name);
+    expect(icons[0]?.closest('.pr-character-card')).toBe(choice(root, 'hayate'));
+
+    // Cards without a usable image stay clickable and keep their name.
+    expect(choice(root, 'komomo').querySelector('img')).toBeNull();
+    expect(choice(root, 'komomo').textContent).toContain(getCharacter('komomo').name);
+    choice(root, 'komomo').click();
+    expect(choice(root, 'komomo').getAttribute('aria-checked')).toBe('true');
+    screen.unmount();
+  });
+
+  it('requests icons once after mount and cancels the pending frame on unmount', () => {
+    const frames: FrameRequestCallback[] = [];
+    const cancelled: number[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
+      frames.push(callback);
+      return 42;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number): void => {
+      cancelled.push(id);
+    });
+
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    expect(previewMock.renderIcons).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(1);
+
+    choice(root, 'nyanta').click();
+    expect(previewMock.renderIcons).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(1);
+
+    screen.unmount();
+    expect(cancelled).toEqual([42]);
+
+    const pending = frames[0];
+    if (pending === undefined) throw new Error('missing animation frame');
+    pending(0);
+    expect(previewMock.renderIcons).not.toHaveBeenCalled();
+  });
+
+  it('selects a card with clicks and arrow keys, updating aria and the preview', () => {
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    const komomo = choice(root, 'komomo');
+    komomo.click();
+    expect(komomo.getAttribute('aria-checked')).toBe('true');
+    expect(choice(root, 'hayate').getAttribute('aria-checked')).toBe('false');
+    expect(previewMock.show).toHaveBeenLastCalledWith('komomo');
+    expect(root.querySelector('.pr-character-preview__name')?.textContent).toBe(
+      getCharacter('komomo').name,
+    );
+    expect(root.querySelector('.pr-character-preview__tagline')?.textContent).toBe(
+      getCharacter('komomo').tagline,
+    );
+    expect(root.querySelector('.pr-character-preview__bubble')?.textContent).toBe(
+      getCharacter('komomo').catchphrase,
+    );
+
+    komomo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(choice(root, 'gonta').getAttribute('aria-checked')).toBe('true');
+    expect(previewMock.show).toHaveBeenLastCalledWith('gonta');
+
+    choice(root, 'hayate').click();
+    choice(root, 'hayate').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+    );
+    expect(choice(root, 'gen-san').getAttribute('aria-checked')).toBe('true');
+    expect(previewMock.show).toHaveBeenLastCalledWith('gen-san');
+    screen.unmount();
+  });
+
+  it('toggles the back view and randomly picks from the roster', () => {
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    const back = findButton(root, 'うしろ');
+    back.click();
+    expect(back.getAttribute('aria-pressed')).toBe('true');
+    expect(previewMock.setBack).toHaveBeenLastCalledWith(true);
+    back.click();
+    expect(back.getAttribute('aria-pressed')).toBe('false');
+    expect(previewMock.setBack).toHaveBeenLastCalledWith(false);
+
+    findButton(root, 'おまかせ').click();
+    const selected = root.querySelector<HTMLButtonElement>('.pr-character-card.is-selected');
+    expect(selected).not.toBeNull();
+    const id = selected?.dataset.value;
+    expect(CHARACTER_IDS as readonly string[]).toContain(id);
+    expect(previewMock.show).toHaveBeenLastCalledWith(id);
+    screen.unmount();
+  });
+
+  it('restores the saved character id', () => {
+    const data = makeSaveData();
+    data.last.characterId = 'nyanta';
+    const h = harness(data);
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    expect(choice(root, 'nyanta').getAttribute('aria-checked')).toBe('true');
+    expect(previewMock.show).toHaveBeenCalledWith('nyanta');
+    screen.unmount();
+  });
+
+  it('falls back to the default character for an unknown saved id', () => {
+    const data = makeSaveData();
+    data.last.characterId = 'moon';
+    const h = harness(data);
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    expect(choice(root, DEFAULT_CHARACTER_ID).getAttribute('aria-checked')).toBe('true');
+    expect(previewMock.show).toHaveBeenCalledWith(DEFAULT_CHARACTER_ID);
+    screen.unmount();
+  });
+
+  it('passes the selected character to loading and saves it', () => {
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    choice(root, 'nyanta').click();
+    findButton(root, 'はじめる').click();
+
+    expect(h.saved[0]?.last.characterId).toBe('nyanta');
+    expect(h.go).toEqual([
+      {
+        id: 'loading',
+        params: {
+          kind: 'loading',
+          setup: {
+            weaponId: 'oofude',
+            stageId: 'karakuri-port',
+            difficulty: 'hard',
+            durationSeconds: 120,
+            characterId: 'nyanta',
+          },
+        },
+      },
+    ]);
+    screen.unmount();
+  });
+
+  it('disposes the preview and drops listeners on unmount', () => {
+    const h = harness();
+    const screen = createSetupScreen();
+    const root = mount(screen, h.ctx);
+
+    const nyanta = choice(root, 'nyanta');
+    const sounds = h.state.okSounds;
+    const shows = previewMock.show.mock.calls.length;
+    expect(previewMock.dispose).not.toHaveBeenCalled();
+
+    screen.unmount();
+    expect(previewMock.dispose).toHaveBeenCalledTimes(1);
+    expect(root.childElementCount).toBe(0);
+
+    nyanta.click();
+    expect(previewMock.show).toHaveBeenCalledTimes(shows);
+    expect(h.state.okSounds).toBe(sounds);
   });
 });
 
