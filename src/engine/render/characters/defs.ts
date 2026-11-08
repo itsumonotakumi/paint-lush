@@ -572,9 +572,11 @@ const kerosuke: CharacterDef = {
     },
     {
       id: 'throat',
-      prim: { t: 'sphere', r: 0.1 },
+      prim: { t: 'sphere', r: 0.08 },
       attach: 'torso',
-      pos: [0, 1.04, -0.24],
+      /* Under the chin, not in front of it: the wide grin dips to the chin
+       * line, so the vocal sac must stay below it or it hides the smile. */
+      pos: [0, 0.92, -0.2],
       color: 'accent',
       anim: { k: 'pulse', from: 1, to: 1.25, hz: 1.2 },
     },
@@ -650,20 +652,43 @@ const kuroha: CharacterDef = {
     },
     {
       id: 'beakMask',
-      prim: { t: 'cone', r: 0.06, h: 0.18 },
+      prim: { t: 'sphere', r: 0.13 },
       attach: 'head',
-      pos: [0.3, 1.39, -0.08],
-      /* Forward along -Z, then tipped outward so it reads from the front. */
-      rot: [-Math.PI / 2, 0, -0.5],
+      /* A festival crow mask pushed aside on the right temple: the plate sits
+       * clear of the eye line and yaws ~50 degrees so its face looks
+       * front-right, with the beak running along that facing direction. */
+      pos: [0.38, 1.37, -0.12],
+      rot: [0, -0.87, 0],
+      scale: [1, 1.1, 0.45],
       color: '#3a3a44',
+      outline: true,
     },
     {
-      id: 'beakTie',
-      prim: { t: 'torus', R: 0.045, r: 0.014 },
+      id: 'beak',
+      prim: { t: 'cone', r: 0.06, h: 0.16 },
       attach: 'head',
-      pos: [0.314, 1.39, -0.106],
-      rot: [0, -0.5, 0],
-      color: 'accent2',
+      pos: [0.38, 1.37, -0.12],
+      /* Euler XYZ: the -Z roll lays the cone's +Y axis flat, then the yaw
+       * swings the tip along the plate's outward normal. */
+      rot: [0, 0.7, -Math.PI / 2],
+      anchor: 'base',
+      color: '#a8946a',
+    },
+    {
+      id: 'maskEyeA',
+      prim: { t: 'sphere', r: 0.018 },
+      attach: 'head',
+      pos: [0.4635, 1.4, -0.0924],
+      color: 'white',
+      basic: true,
+    },
+    {
+      id: 'maskEyeB',
+      prim: { t: 'sphere', r: 0.018 },
+      attach: 'head',
+      pos: [0.3667, 1.4, -0.207],
+      color: 'white',
+      basic: true,
     },
     {
       id: 'wingUpper',
@@ -686,14 +711,6 @@ const kuroha: CharacterDef = {
       color: 'accent',
       mirror: true,
       anim: { k: 'flap', amp: 0.25, hzIdle: 2, hzAir: 6 },
-    },
-    {
-      id: 'pompom',
-      prim: { t: 'sphere', r: 0.05 },
-      attach: 'torso',
-      pos: [0.1, 0.98, -0.19],
-      color: 'accent2',
-      mirror: true,
     },
   ],
 };

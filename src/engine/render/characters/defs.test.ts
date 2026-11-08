@@ -340,6 +340,74 @@ describe('visual polish data', () => {
   });
 });
 
+describe('face details', () => {
+  it('gives kerosuke a broad frog grin on a squashed head', () => {
+    const kerosuke = getCharacter('kerosuke');
+    expect(kerosuke.face.mouth).toBe('wide');
+    expect(kerosuke.face.eye).toBe('top');
+    expect(kerosuke.body.headScale[0]).toBeGreaterThan(1);
+    expect(kerosuke.body.headScale[1]).toBeLessThan(0.94);
+    expect(kerosuke.body.legStyle).toBe('frog');
+  });
+
+  it('gives kuroha a crow mask plate, a muted beak and two painted eyes', () => {
+    const kuroha = getCharacter('kuroha');
+    const plate = partOf(kuroha, 'beakMask');
+    expect(plate.prim.t).toBe('sphere');
+    if (plate.prim.t === 'sphere') expect(plate.prim.r).toBeCloseTo(0.13, 6);
+    expect(plate.color).toBe('#3a3a44');
+    expect(plate.outline).toBe(true);
+    const plateScale = plate.scale ?? [1, 1, 1];
+    expect(plateScale[2], 'the plate must be a flat mask').toBeLessThan(plateScale[0]);
+    expect(plateScale[1]).toBeGreaterThan(plateScale[0]);
+
+    const yaw = plate.rot?.[1] ?? 0;
+    expect(Math.abs(yaw), 'the mask turns ~50 degrees outward').toBeCloseTo(0.87, 2);
+
+    const beak = partOf(kuroha, 'beak');
+    expect(beak.prim.t).toBe('cone');
+    if (beak.prim.t === 'cone') {
+      expect(beak.prim.r).toBeCloseTo(0.06, 6);
+      expect(beak.prim.h).toBeCloseTo(0.16, 6);
+    }
+    expect(beak.anchor, 'the beak swings from its root').toBe('base');
+    expectMuted(beak.color, 'kuroha.beak');
+    /* The beak grows out of the plate, not from a floating point beside it. */
+    expect(beak.pos[0]).toBeCloseTo(plate.pos[0], 6);
+    expect(beak.pos[1]).toBeCloseTo(plate.pos[1], 6);
+    expect(beak.pos[2]).toBeCloseTo(plate.pos[2], 6);
+
+    const dots = kuroha.parts.filter((part) => part.id.startsWith('maskEye'));
+    expect(dots.length, 'the mask needs two painted eyes').toBe(2);
+    for (const dot of dots) {
+      expect(dot.prim.t).toBe('sphere');
+      if (dot.prim.t === 'sphere') expect(dot.prim.r).toBeCloseTo(0.018, 6);
+      expect(dot.color).toBe('white');
+      expect(dot.basic, 'mask eyes are unlit dots').toBe(true);
+    }
+
+    /* The plate faces -Z yawed by `yaw`, so the dots must sit in front of the
+     * plate and outside the beak's base circle, or the cone swallows them. */
+    const faceX = -Math.sin(yaw);
+    const faceZ = -Math.cos(yaw);
+    const beakRadius = beak.prim.t === 'cone' ? beak.prim.r : 0;
+    for (const dot of dots) {
+      const dx = dot.pos[0] - plate.pos[0];
+      const dy = dot.pos[1] - plate.pos[1];
+      const dz = dot.pos[2] - plate.pos[2];
+      const along = dx * faceX + dz * faceZ;
+      expect(along, `${dot.id} must sit on the plate's front`).toBeGreaterThan(0);
+      const radial = Math.hypot(dx - faceX * along, dy, dz - faceZ * along);
+      expect(radial, `${dot.id} hides inside the beak`).toBeGreaterThan(beakRadius);
+    }
+  });
+
+  it('keeps the old beak tie out of kuroha so the mask is the only side detail', () => {
+    const kuroha = getCharacter('kuroha');
+    expect(kuroha.parts.some((part) => part.id === 'beakTie')).toBe(false);
+  });
+});
+
 describe('getCharacter', () => {
   it('returns the definition matching each roster id', () => {
     for (const id of CHARACTER_IDS) {

@@ -1,11 +1,13 @@
 import {
   Box3,
+  BoxGeometry,
   Euler,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshToonMaterial,
   Object3D,
+  SphereGeometry,
   Vector3,
 } from 'three';
 import type { DataTexture } from 'three';
@@ -827,6 +829,7 @@ describe('roster polish: mouths', () => {
       rig.root.updateMatrixWorld(true);
 
       const eyeY = worldPosition(requiredObject(rig.root, 'eye-root-L')).y;
+      const headCentre = headCentreOf(rig.root);
       const nearby: Mesh[] = [];
       rig.root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
@@ -838,8 +841,13 @@ describe('roster polish: mouths', () => {
       for (const name of names) {
         const mouth = requiredMesh(rig.root, name);
         const centre = worldPosition(mouth);
+        /* 'top' eyes ride high on the skull, so the lower-face anchor is read
+         * against the head centre rather than the eye line. */
         expect(centre.y, `${def.id} ${name} too high`).toBeLessThanOrEqual(eyeY - 0.06);
-        expect(centre.y, `${def.id} ${name} too low`).toBeGreaterThanOrEqual(eyeY - 0.22);
+        expect(centre.y, `${def.id} ${name} too low`).toBeGreaterThanOrEqual(headCentre - 0.22);
+        expect(centre.y, `${def.id} ${name} must sit on the lower face`).toBeLessThanOrEqual(
+          headCentre - 0.05,
+        );
         for (const other of nearby) {
           const otherCentre = worldPosition(other);
           if (centre.distanceTo(otherCentre) > 0.12) continue;
@@ -969,19 +977,30 @@ describe('roster polish: gen-san', () => {
 });
 
 describe('roster polish: kuroha', () => {
-  it('shows the beak on the side of the head with a pale tie', () => {
+  it('wears a crow mask pushed aside on the right temple, clear of her eye', () => {
     const cache = createCharacterCache();
     const gradient = createToonGradient();
     const rig = build(defById('kuroha'), cache, gradient);
     rig.root.updateMatrixWorld(true);
 
     const headCentre = headCentreOf(rig.root);
-    const beak = boundsCentre(geometryBounds(rig.root, 'beakMask'));
-    expect(beak.x).toBeGreaterThan(0.25);
-    expect(beak.y).toBeCloseTo(headCentre + 0.1, 1);
+    const mask = geometryBounds(rig.root, 'beakMask');
+    const maskCentre = boundsCentre(mask);
+    expect(maskCentre.x).toBeGreaterThan(0.25);
+    expect(maskCentre.y).toBeCloseTo(headCentre + 0.08, 1);
+    /* Front half of the head, not behind the ear. */
+    expect(maskCentre.z).toBeLessThan(0);
 
-    const tie = requiredMesh(rig.root, 'beakTie');
-    expect(materialColor(tie)).toBe(0xfafafa);
+    /* The mask never covers kuroha's own right eye. */
+    const eyeWhite = geometryBounds(rig.root, 'eye-white-R');
+    expect(mask.min.x).toBeGreaterThan(eyeWhite.max.x);
+
+    /* Plate, beak and two painted eye dots are all present. */
+    const beak = geometryBounds(rig.root, 'beak-mesh');
+    expect(beak.max.x).toBeGreaterThan(maskCentre.x);
+    expect(beak.min.z).toBeLessThan(maskCentre.z);
+    expect(requiredMesh(rig.root, 'maskEyeA').geometry.type).toBe('SphereGeometry');
+    expect(requiredMesh(rig.root, 'maskEyeB').geometry.type).toBe('SphereGeometry');
     cache.dispose();
   });
 });
@@ -1000,6 +1019,108 @@ describe('roster polish: zenmai', () => {
     const mouth = worldPosition(requiredMesh(rig.root, 'mouth-slit'));
     expect(mouth.y).toBeGreaterThan(scarf.max.y + 0.05);
     expect(mouth.z).toBeLessThan(-0.2);
+    cache.dispose();
+  });
+});
+
+/* ---------------- face details: ellipsoid projection ---------------- */
+
+interface HeadEllipsoid {
+  centre: Vector3;
+  radii: Vector3;
+}
+
+/** Head shape read in the head pivot's own frame: the def's head is a sphere
+ * (or box) of `headRadius` scaled by headScale, so the ellipsoid radii are
+ * exactly radius * scale — the tessellated AABB understates a curved surface. */
+function headEllipsoidInHeadFrame(root: Object3D): HeadEllipsoid {
+  const head = requiredMesh(root, 'head');
+  const geometry = head.geometry;
+  let base: Vector3;
+  if (geometry instanceof SphereGeometry) {
+    base = new Vector3(1, 1, 1).multiplyScalar(geometry.parameters.radius);
+  } else if (geometry instanceof BoxGeometry) {
+    base = new Vector3(
+      geometry.parameters.width / 2,
+      geometry.parameters.height / 2,
+      geometry.parameters.depth / 2,
+    );
+  } else {
+    throw new Error(`unexpected head geometry ${geometry.type}`);
+  }
+  const radii = new Vector3(
+    Math.abs(head.scale.x),
+    Math.abs(head.scale.y),
+    Math.abs(head.scale.z),
+  ).multiply(base);
+  return { centre: head.position.clone(), radii };
+}
+
+describe('roster polish: mouth projection', () => {
+  for (const def of CHARACTERS) {
+    if (def.face.mouth === 'none') continue;
+    it(`${def.id}: seats every mouth on the scaled head surface below the eyes`, () => {
+      const cache = createCharacterCache();
+      const gradient = createToonGradient();
+      const rig = build(def, cache, gradient);
+      rig.root.updateMatrixWorld(true);
+
+      const toHead = new Matrix4().copy(rig.pivots.head.matrixWorld).invert();
+      const head = headEllipsoidInHeadFrame(rig.root);
+      const eyeL = worldPosition(requiredObject(rig.root, 'eye-root-L')).applyMatrix4(toHead);
+      const eyeR = worldPosition(requiredObject(rig.root, 'eye-root-R')).applyMatrix4(toHead);
+
+      for (const name of activeMouthNames(def.face.mouth)) {
+        const mouth = worldPosition(requiredMesh(rig.root, name)).applyMatrix4(toHead);
+        expect(mouth.y, `${def.id} ${name} above the eyes`).toBeLessThan(eyeL.y);
+        expect(mouth.y, `${def.id} ${name} above the eyes`).toBeLessThan(eyeR.y);
+        expect(mouth.z, `${def.id} ${name} not on the front`).toBeLessThan(head.centre.z);
+
+        if (def.body.headShape === 'box') {
+          /* A box head has no ellipsoid: the mouth rides the flat front face. */
+          const frontFace = head.centre.z - head.radii.z;
+          expect(Math.abs(mouth.z - frontFace), `${def.id} ${name} off the face`).toBeLessThanOrEqual(
+            0.02,
+          );
+          continue;
+        }
+
+        const nx = (mouth.x - head.centre.x) / head.radii.x;
+        const ny = (mouth.y - head.centre.y) / head.radii.y;
+        const nz = (mouth.z - head.centre.z) / head.radii.z;
+        const squared = nx * nx + ny * ny + nz * nz;
+        expect(squared, `${def.id} ${name} sunk into the head`).toBeGreaterThanOrEqual(1);
+        expect(squared, `${def.id} ${name} floats off the head`).toBeLessThanOrEqual(1.15);
+      }
+      cache.dispose();
+    });
+  }
+
+  it('kerosuke: the frog grin spans the lower face as an upward-opening arc', () => {
+    const cache = createCharacterCache();
+    const gradient = createToonGradient();
+    const rig = build(defById('kerosuke'), cache, gradient);
+    rig.root.updateMatrixWorld(true);
+
+    const mouth = requiredMesh(rig.root, 'mouth-wide-base');
+    const bounds = geometryBounds(rig.root, 'mouth-wide-base');
+    const width = bounds.max.x - bounds.min.x;
+    const height = bounds.max.y - bounds.min.y;
+    expect(width, 'the grin must span the face').toBeGreaterThanOrEqual(0.25);
+    expect(width).toBeGreaterThan(height);
+
+    /* A smile hangs below its anchor; a frown would sit above it. */
+    expect(boundsCentre(bounds).y).toBeLessThan(worldPosition(mouth).y);
+    /* It is ink, not skin: the frog mouth has to read from the front. */
+    expect(materialColor(mouth)).not.toBeNull();
+
+    /* The pulsing throat sac must stay under the grin at its widest, or it
+     * paints over the bottom of the smile. */
+    rig.update({ time: Math.PI / 2 / 1.2, dtSec: 0, run: 0, airborne: false, expression: 'neutral' });
+    rig.root.updateMatrixWorld(true);
+    const throat = geometryBounds(rig.root, 'throat');
+    expect(throat.max.y, 'the sac must actually pulse').toBeGreaterThan(1.01);
+    expect(throat.max.y, 'the throat sac hides the grin').toBeLessThan(bounds.min.y);
     cache.dispose();
   });
 });

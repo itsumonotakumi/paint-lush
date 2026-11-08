@@ -81,7 +81,10 @@ const NECK_WIDTH_FACTOR = 0.55;
 const MIN_NECK_RADIUS = 0.07;
 const MAX_NECK_RADIUS = 0.2;
 const MUZZLE_DROP = 0.03;
-const MUZZLE_PUSH = 0.062;
+/* A muzzle only has to read as a rounded snout: a shallow cap keeps the mouth
+ * on (not floating well in front of) the head's own ellipsoid surface. */
+const MUZZLE_PUSH = 0.018;
+const MUZZLE_BACK = 0.034;
 const EYE_SPREAD_DEFAULT = 0.48;
 const EYE_ELEVATION_DEFAULT = -0.08;
 const EYE_WHITE_RADIUS = 0.11;
@@ -98,6 +101,12 @@ const HIGHLIGHT_SMALL_X = -0.02;
 const HIGHLIGHT_SMALL_Y = -0.025;
 const TOP_EYE_RADIUS = 0.42;
 const MOUTH_Y_FACTOR = 0.45;
+/* Face details sit a hair proud of the head so the ink never z-fights. */
+const MOUTH_OUTSET = 0.005;
+/* The frog grin is a broad, low half-torus that spans the lower face. */
+const WIDE_MOUTH_RADIUS = 0.18;
+const WIDE_MOUTH_TUBE = 0.016;
+const WIDE_MOUTH_DROP = 0.1;
 const BROW_ELEVATION_LIFT = 0.4;
 const CHEEK_DEFAULT = '#ffb0b8';
 
@@ -981,24 +990,37 @@ export function buildCharacter(def: CharacterDef, opts: CharacterBuildOptions): 
   }
 
   /* The mouth hangs one eye-scoop below the eyes, so frog-style 'top' eyes
-   * push the whole lower face up instead of burying the mouth in the chin.
-   * Every style shares this anchor: none of them may drift off the head. */
+   * push the whole lower face up instead of burying the mouth in the chin. */
   const extras = face.extras ?? [];
   const hasMuzzle = extras.includes('muzzle');
   const eyeCentreY =
     face.eye === 'top' ? headHalfHeight * 1.05 : Math.sin(eyeElevation) * headHalfHeight;
-  const mouthY = eyeCentreY - headRadius * MOUTH_Y_FACTOR * headScaleY;
+  const scoopMouthY = eyeCentreY - headRadius * MOUTH_Y_FACTOR * headScaleY;
+  /* The frog grin is deliberately broad and low: it sits just under the head
+   * centre instead of hugging the eye scoop, so the whole arc clears the
+   * squashed ellipsoid instead of diving into it. */
+  const mouthY = face.mouth === 'wide' ? -WIDE_MOUTH_DROP : scoopMouthY;
   const mouthRelative = clamp(mouthY / headHalfHeight, -1, 1);
   const mouthSurfaceZ = boxHead
     ? boxFaceZ
     : -headRadius * headScale[2] * Math.sqrt(Math.max(0, 1 - mouthRelative * mouthRelative));
   /* A mouth in front of a muzzle would be painted over by it, so pushed-out
    * faces get the mouth on the muzzle's own front surface. */
-  const mouthDepth = mouthSurfaceZ - (hasMuzzle ? MUZZLE_PUSH : 0);
-  const wideMouthRadius = Math.max(0.11, headRadius * headScale[0] * 0.55);
+  const mouthDepth = mouthSurfaceZ - (hasMuzzle ? MUZZLE_PUSH : 0) - MOUTH_OUTSET;
+  /* Face features ride the scaled ellipsoid, not a unit sphere. Tilt the mouth
+   * plane about X so it matches the surface normal at its own anchor; without
+   * this the arc's belly sinks inside a squashed head and only its tips show. */
+  const mouthNormalY = mouthY / Math.max(0.0001, headHalfHeight * headHalfHeight);
+  const headRz = headRadius * headScale[2];
+  const mouthNormalZ = mouthSurfaceZ / Math.max(0.0001, headRz * headRz);
+  const mouthTilt = boxHead ? 0 : Math.atan2(mouthNormalY, -mouthNormalZ);
+  const wideMouthRadius = WIDE_MOUTH_RADIUS * clamp(headRadius / TEMPLATE_HEAD_RADIUS, 0.75, 1.25);
   const mouthDefault = new Group();
   mouthDefault.name = 'mouth-default';
   mouthDefault.position.set(0, mouthY, mouthDepth);
+  /* Yaw half a turn so the arc's plane faces -Z (a Z flip would invert the
+   * smile); the per-mesh Z rotation below turns the arc's belly downward. */
+  mouthDefault.rotation.set(mouthTilt, Math.PI, 0);
   headPivot.add(mouthDefault);
 
   function addMouthMesh(parent: Object3D, prim: Prim, name: string, rotationZ = 0): Mesh {
@@ -1014,7 +1036,12 @@ export function buildCharacter(def: CharacterDef, opts: CharacterBuildOptions): 
       addMouthMesh(mouthDefault, { t: 'torus', R: 0.045, r: 0.014, arc: Math.PI }, 'mouth-smile', Math.PI);
       break;
     case 'wide':
-      addMouthMesh(mouthDefault, { t: 'torus', R: wideMouthRadius, r: 0.012, arc: Math.PI }, 'mouth-wide-base', Math.PI);
+      addMouthMesh(
+        mouthDefault,
+        { t: 'torus', R: wideMouthRadius, r: WIDE_MOUTH_TUBE, arc: Math.PI },
+        'mouth-wide-base',
+        Math.PI,
+      );
       break;
     case 'cat': {
       addMouthMesh(mouthDefault, { t: 'torus', R: 0.035, r: 0.01, arc: Math.PI }, 'mouth-cat-L', Math.PI).position.x = -0.035;
@@ -1037,6 +1064,7 @@ export function buildCharacter(def: CharacterDef, opts: CharacterBuildOptions): 
   const mouthO = new Group();
   mouthO.name = 'mouth-o';
   mouthO.position.copy(mouthDefault.position);
+  mouthO.rotation.copy(mouthDefault.rotation);
   mouthO.visible = false;
   headPivot.add(mouthO);
   addMouthMesh(mouthO, { t: 'torus', R: 0.03, r: 0.012 }, 'mouth-o-mesh');
@@ -1044,9 +1072,15 @@ export function buildCharacter(def: CharacterDef, opts: CharacterBuildOptions): 
   const mouthWide = new Group();
   mouthWide.name = 'mouth-wide';
   mouthWide.position.copy(mouthDefault.position);
+  mouthWide.rotation.copy(mouthDefault.rotation);
   mouthWide.visible = false;
   headPivot.add(mouthWide);
-  addMouthMesh(mouthWide, { t: 'torus', R: wideMouthRadius, r: 0.012, arc: Math.PI }, 'mouth-wide-mesh', Math.PI);
+  addMouthMesh(
+    mouthWide,
+    { t: 'torus', R: wideMouthRadius, r: WIDE_MOUTH_TUBE, arc: Math.PI },
+    'mouth-wide-mesh',
+    Math.PI,
+  );
 
   /* cheeks are part of the base face: every face gets them unless it picks
    * its own tint. */
@@ -1087,7 +1121,7 @@ export function buildCharacter(def: CharacterDef, opts: CharacterBuildOptions): 
       /* The muzzle sits below the nose line so the mouth rides on its front. */
       const muzzle = new Mesh(geometryFor(store, { t: 'sphere', r: 0.09 }, lowDetail), toonFor(store, hexFromString(colors.accent, FALLBACK_GREY), gradient));
       muzzle.name = 'muzzle';
-      muzzle.position.set(0, mouthY - MUZZLE_DROP, mouthSurfaceZ);
+      muzzle.position.set(0, mouthY - MUZZLE_DROP, mouthSurfaceZ + MUZZLE_BACK);
       muzzle.scale.set(1.3, 0.8, 0.6);
       headPivot.add(muzzle);
     } else if (extra === 'lashes') {
